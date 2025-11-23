@@ -3,13 +3,15 @@ package com.ridwan.tweetaudit.model;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import lombok.Value;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-@Value
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class TweetWrapper {
-    
-    @JsonProperty("tweet")
-    Tweet tweet;
-
+  @JsonProperty("tweet")
+  private Tweet tweet;
 }

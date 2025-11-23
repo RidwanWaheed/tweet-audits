@@ -12,9 +12,8 @@ import lombok.Data;
 @ConfigurationProperties(prefix = "alignment")
 public class AlignmentCriteria {
 
-    private List<String> forbiddenWords;
-    private boolean checkProfessionalism;
-    private String context;
-    private String desiredTone;
-    
+  private List<String> forbiddenWords;
+  private boolean checkProfessionalism;
+  private String context;
+  private String desiredTone;
 }

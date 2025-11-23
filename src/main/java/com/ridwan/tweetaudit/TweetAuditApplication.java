@@ -10,8 +10,7 @@ import org.springframework.retry.annotation.EnableRetry;
 @ConfigurationPropertiesScan
 public class TweetAuditApplication {
 
-    public static void main(String[] args) {
-        SpringApplication.run(TweetAuditApplication.class, args);
-    }
-
+  public static void main(String[] args) {
+    SpringApplication.run(TweetAuditApplication.class, args);
+  }
 }

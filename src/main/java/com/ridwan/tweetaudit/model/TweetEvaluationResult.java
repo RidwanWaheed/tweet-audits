@@ -10,22 +10,21 @@ import lombok.Builder;
 import lombok.Value;
 import lombok.extern.jackson.Jacksonized;
 
-
 @Value
 @Builder
 @Jacksonized
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class TweetEvaluationResult {
 
-    String tweetId;
+  String tweetId;
 
-    @JsonProperty("should_delete")
-    boolean shouldDelete;
+  @JsonProperty("should_delete")
+  boolean shouldDelete;
 
-    @JsonProperty("reason")
-    String reason;
+  @JsonProperty("reason")
+  String reason;
 
-    @Builder.Default
-    @JsonProperty("matched_criteria")
-    List<String> matchedCriteria = new ArrayList<>();
+  @Builder.Default
+  @JsonProperty("matched_criteria")
+  List<String> matchedCriteria = new ArrayList<>();
 }
