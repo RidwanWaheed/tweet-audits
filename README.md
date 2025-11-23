@@ -4,7 +4,7 @@ Analyze your X (Twitter) archive using Gemini AI and flag tweets for deletion ba
 
 ## Project Status
 
-🚧 **In Development** - Learning project focusing on modern Java backend practices
+**In Development** - Learning project focusing on modern Java backend practices
 
 ## Tech Stack
 
@@ -83,11 +83,11 @@ Key configuration in `application.properties`:
 ## Learning Goals
 
 This project focuses on:
-- ✅ Modern API integration (WebFlux, WebClient)
-- ✅ Error handling & retry logic (Spring Retry, exponential backoff)
-- ✅ Concurrency patterns (batched processing with rate limiting)
-- ✅ Testing strategies (mocking external APIs)
-- ✅ Architectural decision-making (documented in TRADEOFFS.md)
+- Modern API integration (WebFlux, WebClient)
+- Error handling & retry logic (Spring Retry, exponential backoff)
+- Concurrency patterns (batched processing with rate limiting)
+- Testing strategies (mocking external APIs)
+- Architectural decision-making (documented in TRADEOFFS.md)
 
 ## License
 
