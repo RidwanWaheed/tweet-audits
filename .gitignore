@@ -50,6 +50,10 @@ twitter-*.zip
 data/
 docs/
 
+# Learning notes (personal)
+CLAUDE.md
+LEARNING_NOTES.md
+
 # API Keys and secrets (NEVER COMMIT THESE)
 application-local.properties
 *.env
