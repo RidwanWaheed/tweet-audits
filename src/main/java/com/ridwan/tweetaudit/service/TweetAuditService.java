@@ -26,30 +26,28 @@ public class TweetAuditService implements CommandLineRunner {
   private final CSVWriter csvWriter;
   private final AlignmentCriteria criteria;
   private final int batchSize;
+  private final String archivePath;
 
   public TweetAuditService(
       ArchiveParser archiveParser,
       GeminiClient geminiClient,
       CSVWriter csvWriter,
       AlignmentCriteria criteria,
-      @Value("${tweet.processing.batch-size}") int batchSize) {
+      @Value("${tweet.processing.batch-size}") int batchSize,
+      @Value("${archive.input-path}") String archivePath) {
     this.archiveParser = archiveParser;
     this.geminiClient = geminiClient;
     this.csvWriter = csvWriter;
     this.criteria = criteria;
     this.batchSize = batchSize;
+    this.archivePath = archivePath;
   }
 
   @Override
   public void run(String... args) throws Exception {
     log.info("Starting tweet audit process...");
-
-    String archivePath = System.getenv("TWITTER_ARCHIVE_PATH");
-    if (archivePath == null || archivePath.isEmpty()) {
-      archivePath = "tweets.js";
-    }
-
     log.info("Loading tweets from: {}", archivePath);
+
     List<Tweet> tweets = archiveParser.parseTweets(archivePath);
     log.info("Loaded {} tweets", tweets.size());
 
