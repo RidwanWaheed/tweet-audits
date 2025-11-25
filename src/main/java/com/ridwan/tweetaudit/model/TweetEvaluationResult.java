@@ -27,4 +27,6 @@ public class TweetEvaluationResult {
   @Builder.Default
   @JsonProperty("matched_criteria")
   List<String> matchedCriteria = new ArrayList<>();
+
+  String errorMessage;
 }

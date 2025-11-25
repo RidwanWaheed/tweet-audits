@@ -26,23 +26,37 @@ public class CSVWriter {
   public void writeResults(List<TweetEvaluationResult> results) throws IOException {
     log.info("Writing results to CSV: {}", outputPath);
 
-    List<TweetEvaluationResult> flaggedTweets =
-        results.stream().filter(TweetEvaluationResult::isShouldDelete).toList();
+    List<TweetEvaluationResult> flaggedOrErrorTweets =
+        results.stream()
+            .filter(r -> r.isShouldDelete() || r.getErrorMessage() != null)
+            .toList();
 
-    log.info("Writing {} flagged tweets to CSV", flaggedTweets.size());
+    long flaggedCount = flaggedOrErrorTweets.stream().filter(r -> r.getErrorMessage() == null).count();
+    long errorCount = flaggedOrErrorTweets.stream().filter(r -> r.getErrorMessage() != null).count();
+
+    log.info("Writing {} flagged tweets and {} error tweets to CSV", flaggedCount, errorCount);
 
     try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputPath))) {
-      writer.write("tweetUrl,tweetId,matchedCriteria,reason");
+      writer.write("tweetUrl,tweetId,status,matchedCriteria,reason");
       writer.newLine();
 
-      for (TweetEvaluationResult result : flaggedTweets) {
+      for (TweetEvaluationResult result : flaggedOrErrorTweets) {
+        String status = result.getErrorMessage() != null ? "ERROR" : "FLAGGED";
+        String reason = result.getErrorMessage() != null
+            ? result.getErrorMessage()
+            : result.getReason();
+        String matchedCriteria = result.getErrorMessage() != null
+            ? ""
+            : String.join("|", result.getMatchedCriteria());
+
         writer.write(
             String.format(
-                "%s,%s,%s,%s",
+                "%s,%s,%s,%s,%s",
                 tweetUrl(result.getTweetId()),
                 result.getTweetId(),
-                escapeCsv(String.join("|", result.getMatchedCriteria())),
-                escapeCsv(result.getReason())));
+                status,
+                escapeCsv(matchedCriteria),
+                escapeCsv(reason)));
         writer.newLine();
       }
     }
