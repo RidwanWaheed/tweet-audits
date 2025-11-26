@@ -23,6 +23,8 @@ import com.ridwan.tweetaudit.dto.GeminiResponse;
 import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
 import com.ridwan.tweetaudit.ratelimit.AdaptiveRateLimiter;
+import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker;
+import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker.QuotaExceededException;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -34,16 +36,19 @@ public class GeminiClient {
   private final GeminiConfig geminiConfig;
   private final WebClient webClient;
   private final AdaptiveRateLimiter rateLimiter;
+  private final DailyQuotaTracker quotaTracker;
 
   public GeminiClient(
       ObjectMapper objectMapper,
       GeminiConfig geminiConfig,
       WebClient webClient,
-      AdaptiveRateLimiter rateLimiter) {
+      AdaptiveRateLimiter rateLimiter,
+      DailyQuotaTracker quotaTracker) {
     this.objectMapper = objectMapper;
     this.geminiConfig = geminiConfig;
     this.webClient = webClient;
     this.rateLimiter = rateLimiter;
+    this.quotaTracker = quotaTracker;
   }
 
   private String buildPrompt(Tweet tweet, AlignmentCriteria criteria) {
@@ -186,6 +191,9 @@ public class GeminiClient {
     log.info("Evaluating tweet: {}", tweet.getIdStr());
 
     try {
+      // Daily quota check: ensure we haven't hit daily limit
+      quotaTracker.checkQuota();
+
       // Adaptive rate limiting: wait before making the API call
       rateLimiter.waitBeforeNextCall();
 
@@ -193,10 +201,16 @@ public class GeminiClient {
       GeminiResponse response = callGeminiApi(request);
       TweetEvaluationResult result = parseResponse(response, tweet.getIdStr());
 
+      // Increment quota count after successful API call
+      quotaTracker.incrementRequestCount();
+
       log.info("Tweet {} evaluation: should_delete={}", tweet.getIdStr(), result.isShouldDelete());
 
       return result;
 
+    } catch (QuotaExceededException e) {
+      log.error("Daily quota exceeded: {}", e.getMessage());
+      throw new RuntimeException("Daily quota exceeded: " + e.getMessage(), e);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       log.error("Rate limiter interrupted for tweet {}", tweet.getIdStr());

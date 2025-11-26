@@ -21,6 +21,7 @@ import com.ridwan.tweetaudit.dto.*;
 import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
 import com.ridwan.tweetaudit.ratelimit.AdaptiveRateLimiter;
+import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker;
 
 import reactor.core.publisher.Mono;
 
@@ -48,13 +49,16 @@ class GeminiClientTest {
     @Mock
     private AdaptiveRateLimiter rateLimiter;
 
+    @Mock
+    private DailyQuotaTracker quotaTracker;
+
     private GeminiClient geminiClient;
     private GeminiConfig geminiConfig;
     private AlignmentCriteria alignmentCriteria;
     private ObjectMapper objectMapper;
 
     @BeforeEach
-    void setUp() throws InterruptedException {
+    void setUp() throws Exception {
         geminiConfig = new GeminiConfig();
         geminiConfig.setKey("test-api-key");
         geminiConfig.setUrl("https://test-api.com");
@@ -73,7 +77,11 @@ class GeminiClientTest {
         lenient().doNothing().when(rateLimiter).recordRateLimitHit();
         lenient().doNothing().when(rateLimiter).recordServerError();
 
-        geminiClient = new GeminiClient(objectMapper, geminiConfig, webClient, rateLimiter);
+        // Mock quota tracker to do nothing (tests run without quota checks)
+        doNothing().when(quotaTracker).checkQuota();
+        doNothing().when(quotaTracker).incrementRequestCount();
+
+        geminiClient = new GeminiClient(objectMapper, geminiConfig, webClient, rateLimiter, quotaTracker);
     }
 
     @Test

@@ -11,6 +11,7 @@ import com.ridwan.tweetaudit.model.ProcessingCheckpoint;
 import com.ridwan.tweetaudit.output.CSVWriter;
 import com.ridwan.tweetaudit.parser.ArchiveParser;
 import com.ridwan.tweetaudit.progress.ProgressTracker;
+import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker;
 import com.ridwan.tweetaudit.validation.ConfigValidator;
 
 import java.util.ArrayList;
@@ -34,6 +35,7 @@ public class TweetAuditService implements CommandLineRunner {
   private final CheckpointManager checkpointManager;
   private final ConfigValidator configValidator;
   private final ProgressTracker progressTracker;
+  private final DailyQuotaTracker quotaTracker;
   private final int batchSize;
   private final String archivePath;
   private final String apiKey;
@@ -47,6 +49,7 @@ public class TweetAuditService implements CommandLineRunner {
       CheckpointManager checkpointManager,
       ConfigValidator configValidator,
       ProgressTracker progressTracker,
+      DailyQuotaTracker quotaTracker,
       @Value("${tweet.processing.batch-size}") int batchSize,
       @Value("${archive.input-path}") String archivePath,
       @Value("${gemini.api.key}") String apiKey,
@@ -58,6 +61,7 @@ public class TweetAuditService implements CommandLineRunner {
     this.checkpointManager = checkpointManager;
     this.configValidator = configValidator;
     this.progressTracker = progressTracker;
+    this.quotaTracker = quotaTracker;
     this.batchSize = batchSize;
     this.archivePath = archivePath;
     this.apiKey = apiKey;
@@ -69,6 +73,9 @@ public class TweetAuditService implements CommandLineRunner {
     log.info("Starting tweet audit process...");
 
     configValidator.validateConfiguration(apiKey, archivePath, outputPath, criteria, batchSize);
+
+    // Display current quota status
+    quotaTracker.logQuotaStatus();
 
     log.info("Loading tweets from: {}", archivePath);
 
@@ -187,5 +194,8 @@ public class TweetAuditService implements CommandLineRunner {
     log.info("Clean tweets: {}", cleanCount);
     log.info("Flagged for deletion: {}", flaggedCount);
     log.info("Errors: {}", errorCount);
+
+    // Display final quota status
+    quotaTracker.logQuotaStatus();
   }
 }

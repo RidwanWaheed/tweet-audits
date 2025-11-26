@@ -98,6 +98,68 @@ Thread.sleep() chosen because:
 Adaptive rate limiting chosen for:
 - **Automatic optimization:** Speeds up when API is fast, slows down when API is stressed
 - **Respectful behavior:** Backs off on rate limits/errors without manual intervention
+
+---
+
+## 2.2. Daily Quota Tracking
+
+**Decision:** Persistent JSON-based quota tracking with Pacific Time zone awareness
+**Alternatives Considered:** In-memory tracking, database-based tracking, no tracking
+
+### Strategy
+
+**Implementation:**
+- **Persistent storage:** JSON file (`results/daily_quota.json`) survives app restarts
+- **Timezone awareness:** Tracks quota based on Pacific Time (Gemini's quota reset schedule)
+- **Automatic reset:** Detects new day and resets counter at midnight PST
+- **Pre-flight checks:** Validates remaining quota before processing starts
+- **Warning system:** Logs warnings at 92% usage (230/250 requests)
+- **Graceful stopping:** Prevents hitting 250 RPD limit unexpectedly
+
+**Quota file format:**
+```json
+{
+  "currentDate": "2025-01-26",
+  "requestCount": 145
+}
+```
+
+### Comparison
+
+| Approach | Persistent | Timezone-Aware | Complexity | Dependencies |
+|----------|-----------|----------------|------------|--------------|
+| **JSON Tracking (Chosen)** | Yes | Yes | Low | Jackson (existing) |
+| In-Memory Tracking | No | N/A | Very Low | None |
+| Database Tracking | Yes | Yes | High | JDBC/JPA |
+| No Tracking | N/A | N/A | None | None |
+
+### Rationale
+
+Daily quota tracking chosen for:
+- **Prevents wasted time:** Avoids processing 100 tweets, hitting quota at tweet #50, failing rest
+- **Better UX:** Clear messaging about quota status and reset time
+- **Production-ready:** Handles multi-day processing jobs and restarts
+- **Simple implementation:** Leverages existing Jackson dependency
+- **Timezone correctness:** Gemini resets quota at midnight PST, not user's local time
+
+**Why not simpler alternatives:**
+- **In-memory:** Loses state on restart, can't resume multi-day jobs
+- **Database:** Overkill for single-user batch tool, adds complexity
+- **No tracking:** Users hit quota unexpectedly, poor experience
+
+**Key insight:** Gemini's 250 RPD limit is the hard constraint (not 15 RPM). For large archives:
+- 250 tweets takes ~4 hours (with batch delays)
+- Multi-day processing is common
+- Quota tracking is essential, not optional
+
+**Example output:**
+```
+=== Daily Quota Status ===
+  Date: 2025-01-26
+  Used: 145/250 requests (58%)
+  Remaining: 105 requests
+  Resets: midnight PST (in 8 hours)
+```
 - **Better throughput:** Can process faster than fixed 6-second delays when API is responsive
 - **Simplicity:** Single component with clear responsibilities
 - **Testability:** Easy to unit test different scenarios
@@ -506,6 +568,7 @@ Pacific Time chosen for:
 | Architecture | Batch processing | Simplicity, learning focus, proven pattern |
 | Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
 | **Adaptive Rate Limiting** | **Response-based delay adjustment** | **Optimizes throughput, respectful behavior** |
+| **Daily Quota Tracking** | **Persistent JSON (Pacific Time)** | **Prevents quota exhaustion, timezone-correct** |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited API |
 | Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
@@ -527,6 +590,8 @@ Pacific Time chosen for:
 8. **Set-based lookups scale** - O(1) contains() vs O(n) CSV scan for resume performance
 9. **Adaptive rate limiting optimizes throughput** - Response-time-based adjustments (200ms-10s) respect API health while maximizing speed when possible
 10. **Good citizen pattern** - Fast responses → speed up, slow/errors → back off creates respectful API client behavior
+11. **Daily quotas require persistence** - 250 RPD limit spans days, in-memory tracking fails across restarts
+12. **Timezone matters for quotas** - Always track using API provider's timezone (Pacific Time for Gemini) to avoid off-by-one-day errors
 
 ---
 
