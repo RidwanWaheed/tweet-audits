@@ -45,10 +45,7 @@ Thumbs.db
 
 # Application Specific
 # Twitter archive files (SENSITIVE DATA - real user data)
-data/tweets.js
-data/twitter-*.zip
-data/*.js
-!src/main/resources/sample-data/
+my_data/
 docs/
 
 # Learning notes (personal)
