@@ -172,6 +172,9 @@ public class TweetAuditService implements CommandLineRunner {
 
       checkpointManager.saveCheckpoint(updatedCheckpoint);
 
+      // Write batch results to CSV incrementally
+      csvWriter.appendResults(results);
+
       if (batchNum < totalBatches - 1) {
         log.info("Waiting 60 seconds before next batch (rate limiting)...");
         Thread.sleep(60000);
