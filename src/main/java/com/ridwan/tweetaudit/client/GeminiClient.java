@@ -22,6 +22,7 @@ import com.ridwan.tweetaudit.dto.GeminiRequest;
 import com.ridwan.tweetaudit.dto.GeminiResponse;
 import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
+import com.ridwan.tweetaudit.ratelimit.AdaptiveRateLimiter;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -32,11 +33,17 @@ public class GeminiClient {
   private final ObjectMapper objectMapper;
   private final GeminiConfig geminiConfig;
   private final WebClient webClient;
+  private final AdaptiveRateLimiter rateLimiter;
 
-  public GeminiClient(ObjectMapper objectMapper, GeminiConfig geminiConfig, WebClient webClient) {
+  public GeminiClient(
+      ObjectMapper objectMapper,
+      GeminiConfig geminiConfig,
+      WebClient webClient,
+      AdaptiveRateLimiter rateLimiter) {
     this.objectMapper = objectMapper;
     this.geminiConfig = geminiConfig;
     this.webClient = webClient;
+    this.rateLimiter = rateLimiter;
   }
 
   private String buildPrompt(Tweet tweet, AlignmentCriteria criteria) {
@@ -111,15 +118,34 @@ public class GeminiClient {
   private GeminiResponse callGeminiApi(GeminiRequest request) {
     log.debug("Calling Gemini API: {}", geminiConfig.getUrl());
 
-    return webClient
-        .post()
-        .uri(geminiConfig.getUrl())
-        .header("x-goog-api-key", geminiConfig.getKey())
-        .header("Content-Type", "application/json")
-        .bodyValue(request)
-        .retrieve()
-        .bodyToMono(GeminiResponse.class)
-        .block();
+    long startTime = System.currentTimeMillis();
+
+    try {
+      GeminiResponse response =
+          webClient
+              .post()
+              .uri(geminiConfig.getUrl())
+              .header("x-goog-api-key", geminiConfig.getKey())
+              .header("Content-Type", "application/json")
+              .bodyValue(request)
+              .retrieve()
+              .bodyToMono(GeminiResponse.class)
+              .block();
+
+      long responseTime = System.currentTimeMillis() - startTime;
+      rateLimiter.recordSuccess(responseTime);
+
+      return response;
+
+    } catch (WebClientResponseException.TooManyRequests e) {
+      rateLimiter.recordRateLimitHit();
+      throw e;
+    } catch (WebClientResponseException e) {
+      if (e.getStatusCode().is5xxServerError()) {
+        rateLimiter.recordServerError();
+      }
+      throw e;
+    }
   }
 
   private TweetEvaluationResult parseResponse(GeminiResponse response, String tweetId)
@@ -160,6 +186,9 @@ public class GeminiClient {
     log.info("Evaluating tweet: {}", tweet.getIdStr());
 
     try {
+      // Adaptive rate limiting: wait before making the API call
+      rateLimiter.waitBeforeNextCall();
+
       GeminiRequest request = buildRequest(tweet, criteria);
       GeminiResponse response = callGeminiApi(request);
       TweetEvaluationResult result = parseResponse(response, tweet.getIdStr());
@@ -168,6 +197,10 @@ public class GeminiClient {
 
       return result;
 
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      log.error("Rate limiter interrupted for tweet {}", tweet.getIdStr());
+      throw new RuntimeException("Rate limiter interrupted: " + tweet.getIdStr(), e);
     } catch (Exception e) {
       log.error("Failed to evaluate tweet {}: {}", tweet.getIdStr(), e.getMessage());
       throw new RuntimeException("Failed to evaluate tweet: " + tweet.getIdStr(), e);

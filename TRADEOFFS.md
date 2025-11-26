@@ -68,6 +68,65 @@ Thread.sleep() chosen because:
 
 ---
 
+## 2.1. Dynamic (Adaptive) Rate Limiting
+
+**Decision:** Adaptive delay adjustment based on API response behavior
+**Alternatives Considered:** Fixed delays, exponential backoff only
+
+### Strategy
+
+**Adaptive behavior:**
+- **Fast responses (< 500ms):** Reduce delay by 100ms (speed up gradually)
+- **Normal responses (500-3000ms):** Maintain current delay
+- **Slow responses (> 3000ms):** Increase delay by 500ms (be more respectful)
+- **Rate limit hit (429):** Double delay (aggressive backoff)
+- **Server error (5xx):** Increase delay by 500ms (moderate backoff)
+
+**Delay bounds:** 200ms (minimum) to 10s (maximum)
+**Initial delay:** 1000ms (conservative start)
+
+### Comparison
+
+| Approach | Adapts to API | Handles Bursts | Complexity | Efficiency |
+|----------|---------------|----------------|------------|------------|
+| **Adaptive (Chosen)** | Yes | Yes | Low | High |
+| Fixed Delays | No | No | Very Low | Low |
+| Exponential Backoff Only | Partial | Yes | Very Low | Medium |
+
+### Rationale
+
+Adaptive rate limiting chosen for:
+- **Automatic optimization:** Speeds up when API is fast, slows down when API is stressed
+- **Respectful behavior:** Backs off on rate limits/errors without manual intervention
+- **Better throughput:** Can process faster than fixed 6-second delays when API is responsive
+- **Simplicity:** Single component with clear responsibilities
+- **Testability:** Easy to unit test different scenarios
+
+**How it works in practice:**
+1. Start conservative (1000ms delay)
+2. If API responds quickly repeatedly → gradually reduce to 200ms minimum
+3. If API slows down or errors → increase delay to reduce load
+4. If rate limited → aggressively back off (double delay)
+
+**Why not fixed delays:**
+- Wastes time when API is fast (fixed 6s delay might be too conservative)
+- Doesn't adapt to API stress (keeps hammering even when API is slow)
+
+**Why not exponential backoff only:**
+- Only increases delays, never speeds up
+- Doesn't distinguish between fast/normal/slow responses
+- Misses optimization opportunities
+
+### Implementation
+
+See: `AdaptiveRateLimiter.java` with 12 comprehensive unit tests covering:
+- Speed up/slow down scenarios
+- Boundary conditions (min/max delays)
+- Rate limit and server error handling
+- Multi-scenario adaptation
+
+---
+
 ## 3. State Management & Checkpointing
 
 **Decision:** JSON checkpoint + CSV output
@@ -446,6 +505,7 @@ Pacific Time chosen for:
 |----------|----------------|-------------------|
 | Architecture | Batch processing | Simplicity, learning focus, proven pattern |
 | Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
+| **Adaptive Rate Limiting** | **Response-based delay adjustment** | **Optimizes throughput, respectful behavior** |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited API |
 | Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
@@ -465,6 +525,8 @@ Pacific Time chosen for:
 6. **Crash safety is cheap** - JSON write (1ms) vs API call (2000ms) = negligible overhead
 7. **User flexibility matters** - Manual cleanup strategy provides control over resume vs fresh start
 8. **Set-based lookups scale** - O(1) contains() vs O(n) CSV scan for resume performance
+9. **Adaptive rate limiting optimizes throughput** - Response-time-based adjustments (200ms-10s) respect API health while maximizing speed when possible
+10. **Good citizen pattern** - Fast responses → speed up, slow/errors → back off creates respectful API client behavior
 
 ---
 

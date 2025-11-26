@@ -2,6 +2,7 @@ package com.ridwan.tweetaudit.client;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
 
 import java.util.List;
@@ -19,6 +20,7 @@ import com.ridwan.tweetaudit.config.GeminiConfig;
 import com.ridwan.tweetaudit.dto.*;
 import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
+import com.ridwan.tweetaudit.ratelimit.AdaptiveRateLimiter;
 
 import reactor.core.publisher.Mono;
 
@@ -43,13 +45,16 @@ class GeminiClientTest {
     @Mock
     private WebClient.ResponseSpec responseSpec;
 
+    @Mock
+    private AdaptiveRateLimiter rateLimiter;
+
     private GeminiClient geminiClient;
     private GeminiConfig geminiConfig;
     private AlignmentCriteria alignmentCriteria;
     private ObjectMapper objectMapper;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws InterruptedException {
         geminiConfig = new GeminiConfig();
         geminiConfig.setKey("test-api-key");
         geminiConfig.setUrl("https://test-api.com");
@@ -61,7 +66,14 @@ class GeminiClientTest {
         alignmentCriteria.setDesiredTone("Professional");
 
         objectMapper = new ObjectMapper();
-        geminiClient = new GeminiClient(objectMapper, geminiConfig, webClient);
+
+        // Mock rate limiter to do nothing (tests run instantly)
+        doNothing().when(rateLimiter).waitBeforeNextCall();
+        doNothing().when(rateLimiter).recordSuccess(anyLong());
+        lenient().doNothing().when(rateLimiter).recordRateLimitHit();
+        lenient().doNothing().when(rateLimiter).recordServerError();
+
+        geminiClient = new GeminiClient(objectMapper, geminiConfig, webClient, rateLimiter);
     }
 
     @Test
