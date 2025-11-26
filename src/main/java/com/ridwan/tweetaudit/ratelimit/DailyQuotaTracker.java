@@ -27,19 +27,19 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>Graceful stopping before hitting quota
  * </ul>
  *
- * <p>Gemini Free Tier Limits:
+ * <p>Gemini 2.5 Flash-Lite Free Tier Limits:
  *
  * <ul>
  *   <li>15 Requests Per Minute (RPM) - handled by AdaptiveRateLimiter
- *   <li>250 Requests Per Day (RPD) - handled by this tracker
+ *   <li>1,000 Requests Per Day (RPD) - handled by this tracker
  * </ul>
  */
 @Component
 @Slf4j
 public class DailyQuotaTracker {
 
-  private static final int DAILY_LIMIT = 250;
-  private static final int WARNING_THRESHOLD = 230; // Warn at 92% usage
+  private static final int DAILY_LIMIT = 1000;
+  private static final int WARNING_THRESHOLD = 950; // Warn at 95% usage
   private static final String QUOTA_FILE_PATH = "results/daily_quota.json";
   private static final ZoneId PACIFIC_TIME = ZoneId.of("America/Los_Angeles");
 

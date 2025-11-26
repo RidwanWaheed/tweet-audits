@@ -40,7 +40,7 @@ class DailyQuotaTrackerTest {
 
   @Test
   void shouldStartWithFullQuota() {
-    assertEquals(250, quotaTracker.getRemainingQuota());
+    assertEquals(1000, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -48,7 +48,7 @@ class DailyQuotaTrackerTest {
     quotaTracker.checkQuota();
     quotaTracker.incrementRequestCount();
 
-    assertEquals(249, quotaTracker.getRemainingQuota());
+    assertEquals(999, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -64,13 +64,13 @@ class DailyQuotaTrackerTest {
     DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
 
     // Should load persisted state
-    assertEquals(248, newTracker.getRemainingQuota());
+    assertEquals(998, newTracker.getRemainingQuota());
   }
 
   @Test
   void shouldThrowExceptionWhenQuotaExceeded() {
     // Exhaust quota
-    for (int i = 0; i < 250; i++) {
+    for (int i = 0; i < 1000; i++) {
       quotaTracker.incrementRequestCount();
     }
 
@@ -82,13 +82,13 @@ class DailyQuotaTrackerTest {
         assertThrows(QuotaExceededException.class, () -> quotaTracker.checkQuota());
 
     assertTrue(exception.getMessage().contains("Daily quota exhausted"));
-    assertTrue(exception.getMessage().contains("250/250 requests"));
+    assertTrue(exception.getMessage().contains("1000/1000 requests"));
   }
 
   @Test
   void shouldAllowRequestsUpToLimit() throws QuotaExceededException {
-    // Use 249 requests (should be fine)
-    for (int i = 0; i < 249; i++) {
+    // Use 999 requests (should be fine)
+    for (int i = 0; i < 999; i++) {
       quotaTracker.checkQuota();
       quotaTracker.incrementRequestCount();
     }
@@ -111,7 +111,7 @@ class DailyQuotaTrackerTest {
       quotaTracker.incrementRequestCount();
     }
 
-    assertEquals(240, quotaTracker.getRemainingQuota());
+    assertEquals(990, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -125,7 +125,7 @@ class DailyQuotaTrackerTest {
     DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
 
     // Should start with full quota
-    assertEquals(250, newTracker.getRemainingQuota());
+    assertEquals(1000, newTracker.getRemainingQuota());
 
     // Should create file after first increment
     newTracker.incrementRequestCount();
@@ -139,13 +139,13 @@ class DailyQuotaTrackerTest {
       quotaTracker.incrementRequestCount();
     }
 
-    assertEquals(200, quotaTracker.getRemainingQuota());
+    assertEquals(950, quotaTracker.getRemainingQuota());
 
     // Reset quota
     quotaTracker.reset();
 
     // Should have full quota again
-    assertEquals(250, quotaTracker.getRemainingQuota());
+    assertEquals(1000, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -178,13 +178,13 @@ class DailyQuotaTrackerTest {
     DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
 
     // Should start with full quota (fallback to new state)
-    assertEquals(250, newTracker.getRemainingQuota());
+    assertEquals(1000, newTracker.getRemainingQuota());
   }
 
   @Test
   void shouldReturnZeroWhenQuotaExhausted() {
     // Exhaust quota
-    for (int i = 0; i < 250; i++) {
+    for (int i = 0; i < 1000; i++) {
       quotaTracker.incrementRequestCount();
     }
 

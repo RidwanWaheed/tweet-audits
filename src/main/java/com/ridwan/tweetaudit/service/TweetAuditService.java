@@ -177,7 +177,7 @@ public class TweetAuditService implements CommandLineRunner {
 
       if (batchNum < totalBatches - 1) {
         log.info("Waiting 60 seconds before next batch (rate limiting)...");
-        Thread.sleep(60000);
+        Thread.sleep(60000); // 15 requests/minute = batch of 15 every 60 seconds
       }
     }
 
