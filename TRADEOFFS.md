@@ -68,37 +68,64 @@ Thread.sleep() chosen because:
 
 ---
 
-## 3. State Management
+## 3. State Management & Checkpointing
 
-**Decision:** Single CSV file  
-**Alternative Considered:** Two separate CSVs (tweets + quota)
+**Decision:** JSON checkpoint + CSV output
+**Alternatives Considered:** Single CSV for both, database
 
 ### Structure
+
+**Checkpoint (results/checkpoint.json):**
+```json
+{
+  "last_processed_tweet_id": "123",
+  "processed_tweet_ids": ["1", "2", "3"],
+  "timestamp": "2025-11-26T06:00:00Z",
+  "total_processed": 3,
+  "total_tweets": 10,
+  "flagged_count": 1,
+  "error_count": 0
+}
+```
+
+**Output (results/flagged_tweets.csv):**
 ```csv
-tweet_id,processed,processed_date_pt,analysis_result,error
+tweetUrl,tweetId,status,matchedCriteria,reason
 ```
 
 ### Comparison
 
-| Factor | Single CSV (Chosen) | Two CSVs |
-|--------|---------------------|----------|
-| Atomicity | Single write point | Two files must stay synchronized |
-| Consistency | Cannot get out of sync | Risk of inconsistency on crash |
-| Simplicity | One file to manage | Coordination logic needed |
-| Quota Calculation | Derived (count rows by date) | Direct lookup |
-| Crash Safety | One failure point | Two failure points |
+| Factor | JSON + CSV (Chosen) | Single CSV | Database |
+|--------|---------------------|------------|----------|
+| Resume Speed | Fast (Set lookup) | Slow (scan file) | Fast (indexed) |
+| Human Readable | Both formats | Yes | No (requires client) |
+| Dependencies | Zero | Zero | DB server required |
+| Atomicity | File-level | Row-level | Transaction-level |
+| Portability | Maximum | High | Low |
+| Complexity | Low | Lowest | High |
 
 ### Rationale
 
-Single CSV chosen for:
-- Atomic updates - one write operation eliminates synchronization issues
-- DRY principle - quota is derivable from processed tweets (count where date = today)
-- Simpler code - no coordination between files needed
-- Crash safety - cannot have inconsistent state between two files
-- Proven pattern from Python thesis project
-- Date already present in each tweet record
+JSON checkpoint + CSV output chosen for:
+- **Separation of concerns**: Checkpoint = runtime state, CSV = final output
+- **Fast resume**: Set-based lookup O(1) vs CSV scan O(n)
+- **Clean output**: CSV only contains flagged tweets + errors (user-facing)
+- **Zero dependencies**: No database setup required
+- **Manual cleanup strategy**: User controls when to start fresh (delete checkpoint)
+- **Crash safety**: Checkpoint saved after each batch (max loss: 1 batch)
+- **Human inspectable**: Both files are text-based and readable
 
-Two CSVs only beneficial when tracking complex quota metadata unrelated to individual tweets (not applicable here).
+**Why not single CSV?**
+- Would need to store ALL tweets (flagged + clean) to track processed IDs
+- Resume requires scanning entire file to find processed IDs
+- Mixes runtime state with final output
+- CSV doesn't support Sets (would need pipe-separated string)
+
+**Why not database?**
+- Overkill for single-user CLI tool
+- Adds deployment complexity
+- Not portable (can't easily share/inspect)
+- Learning project focuses on Java/Spring, not DB management
 
 ---
 
@@ -135,39 +162,162 @@ Parallel appropriate for: Internal APIs, no rate limits, operations where latenc
 
 ---
 
-## 5. Checkpoint Strategy
+## 5. Checkpoint Frequency
 
-**Decision:** Save after every tweet  
-**Alternative Considered:** Batch checkpoints (every N tweets)
+**Decision:** Save after every batch (10 tweets)
+**Alternatives Considered:** After every tweet, manual checkpoints only
 
 ### Comparison
 
-| Strategy | Max Loss on Crash | Quota Waste | Disk I/O | Code Complexity |
-|----------|-------------------|-------------|----------|-----------------|
-| Every Tweet (Chosen) | 1 tweet | ~0 requests | ~1ms per tweet | Simple |
-| Every 10 Tweets | 10 tweets | Up to 10 requests | ~10ms per 10 tweets | More complex |
+| Strategy | Max Loss on Crash | Quota Waste | Disk I/O | Processing Overhead |
+|----------|-------------------|-------------|----------|---------------------|
+| Every Batch (Chosen) | 10 tweets | Up to 10 requests | ~1ms per batch | 0.03% |
+| Every Tweet | 1 tweet | ~1 request | ~1ms per tweet | 0.3% |
+| Manual Only | All progress | Unlimited | 0 | 0% |
 
 ### Performance Analysis
 
-- CSV write operation: ~0.1-1ms
-- Gemini API call: ~2,000-3,000ms
-- Overhead ratio: 0.025%
+**Current implementation:**
+- JSON write: ~1ms
+- Gemini API call: ~2,000ms per tweet
+- Batch size: 10 tweets
+- Total batch time: ~20,000ms (20 seconds)
+- Checkpoint overhead: 1ms / 20,000ms = 0.0005%
+
+**Actual timing:**
+```
+Batch 1 (10 tweets): 20 seconds processing + 1ms save = 20.001s
+Batch 2 (10 tweets): 20 seconds processing + 1ms save = 20.001s
+Total for 100 tweets: ~200 seconds (checkpoint adds ~0.1s)
+```
 
 ### Rationale
 
-Per-tweet checkpointing chosen for:
-- Negligible performance impact (API call dominates timing)
-- Maximum crash safety - lose at most one tweet's progress
-- Minimal quota waste - free tier has only 250 requests/day
-- Simpler code - no batch buffer management
-- Always reflects true processing state
-- Proven effective in Python thesis project
+Batch checkpointing chosen for:
+- **Aligns with rate limiting**: Already pausing 60s between batches
+- **Negligible overhead**: 1ms checkpoint vs 20s batch processing
+- **Acceptable risk**: Max loss is 10 tweets (100 API requests = $0 on free tier)
+- **Natural checkpoint points**: Save during rate limit pause
+- **Simpler code**: No need to save inside tweet processing loop
 
-Batch checkpointing appropriate for: Very high throughput systems (thousands/second), local operations only, when storage significantly slower than compute.
+**Why not every tweet?**
+- 10x more disk writes (100 vs 10 for 100 tweets)
+- Adds complexity to inner loop
+- API call time (2s) dominates anyway
+- Risk difference minimal (1 vs 10 tweets lost)
+
+**Why not manual only?**
+- Defeats the purpose of checkpointing
+- Any crash loses ALL progress
+- Unacceptable for large archives (1000+ tweets = hours of work)
+
+**Crash scenarios:**
+```
+Scenario 1: Crash during batch processing
+  - Saved state: Last completed batch
+  - Lost progress: Current batch (max 10 tweets)
+  - Recovery: Resume from next batch
+
+Scenario 2: Crash during rate limit pause
+  - Saved state: Just completed batch
+  - Lost progress: 0 tweets
+  - Recovery: Resume from next batch immediately
+```
 
 ---
 
-## 6. Error Recovery
+## 6. Checkpoint Cleanup Strategy
+
+**Decision:** Manual cleanup (user decides)
+**Alternatives Considered:** Auto-delete on success, auto-delete on failure, never delete
+
+### Comparison
+
+| Strategy | User Control | Crash Recovery | Re-run Behavior | Disk Usage |
+|----------|--------------|----------------|-----------------|------------|
+| Manual (Chosen) | Full control | Resume or fresh | User chooses | Requires cleanup |
+| Auto-delete on success | Limited | Resume | Always fresh | Auto-managed |
+| Auto-delete on failure | None | No resume | Always fresh | Auto-managed |
+| Never delete | Full | Always resume | Must delete manually | Grows unbounded |
+
+### Implementation
+
+**On successful completion:**
+```java
+checkpointManager.deleteCheckpoint();  // Clean slate for next run
+log.info("Checkpoint deleted (processing complete)");
+```
+
+**On crash/interruption:**
+- Checkpoint file remains
+- User decides: Resume (run again) or Start fresh (delete checkpoint manually)
+
+### Rationale
+
+Manual cleanup chosen for:
+- **User flexibility**: User controls when to resume vs start fresh
+- **Debugging capability**: Can inspect checkpoint after completion
+- **Safe default**: Preserves state on crash (enables resume)
+- **Explicit behavior**: User knows what will happen (resume or fresh)
+
+**Deletion on success prevents:**
+- Accidentally resuming from old state
+- Stale checkpoints from previous runs
+- User confusion ("Why is it resuming?")
+
+**Preserving on failure enables:**
+- Resume after fixing issues (API key, network, etc.)
+- Inspect progress ("How far did I get?")
+- Manual retry decisions ("Start fresh or continue?")
+
+**Alternative approaches rejected:**
+
+**Auto-delete on success only:** (Also considered, very close)
+- Pro: Clean slate for next run
+- Pro: No stale checkpoints
+- Con: Can't inspect final state
+- **Verdict:** Acceptable alternative, chosen for simplicity
+
+**Auto-delete on failure:**
+- Con: Loses all progress on crash
+- Con: Forces starting over
+- **Verdict:** Defeats purpose of checkpointing
+
+**Never delete:**
+- Con: Stale checkpoints cause confusion
+- Con: Requires manual cleanup every time
+- Con: First run after completion would resume (wrong!)
+- **Verdict:** Poor user experience
+
+### User Experience
+
+**Successful run:**
+```bash
+$ mvn spring-boot:run
+# Processes all 100 tweets
+# Checkpoint deleted automatically
+# ✓ Next run starts fresh
+```
+
+**Interrupted run:**
+```bash
+$ mvn spring-boot:run
+# Processes 30 tweets, then Ctrl+C
+# Checkpoint preserved (30 tweets)
+
+# Resume:
+$ mvn spring-boot:run
+# Resumes from tweet 31
+
+# OR start fresh:
+$ rm results/checkpoint.json
+$ mvn spring-boot:run
+# Processes from tweet 1
+```
+
+---
+
+## 7. Error Recovery
 
 **Decision:** Spring @Retryable with exponential backoff  
 **Alternatives Considered:** Manual retry loops, fail-fast
@@ -204,11 +354,41 @@ Batch checkpointing appropriate for: Very high throughput systems (thousands/sec
 - Retryable: Network timeouts, 5xx server errors, 429 rate limits (transient)
 - Non-retryable: 400 Bad Request, 401 Unauthorized, 404 Not Found (permanent)
 
+### Two-Tier Error Handling Strategy
+
+**Critical distinction:** @Retryable and checkpoint error marking work at **different time scales**.
+
+**@Retryable (seconds):** Automatic recovery from transient issues
+- Network hiccup → Retry after 1s → Success
+- Brief server outage → Retry after 2s → Success
+- User never sees these errors
+
+**Checkpoint marking (across runs):** Manual recovery from persistent issues
+- Invalid API key → All 3 retries fail → Mark as ERROR → User fixes key → Manual retry
+- Malformed data → All 3 retries fail → Mark as ERROR → User inspects tweet
+- Prevents infinite retry loops on permanently failing tweets
+
+**Why mark failed tweets as "processed":**
+```java
+// After @Retryable exhausts all attempts:
+processedTweetIds.add(tweet.getIdStr());  // Don't retry this tweet automatically
+errorCount++;
+```
+
+Without this: Same failing tweet retried on every run → infinite loop
+With this: User controls retry via checkpoint deletion (manual decision)
+
+**Recovery flow:**
+1. @Retryable tries 3 times (automatic, seconds)
+2. Still fails → Mark as ERROR in checkpoint (save progress)
+3. Continue processing (don't get stuck)
+4. User sees ERROR in CSV → Fixes root cause → Deletes checkpoint → Retries manually
+
 Manual retry appropriate for: Non-Spring projects, custom retry logic requirements.
 
 ---
 
-## 7. Timezone Handling
+## 8. Timezone Handling
 
 **Decision:** Use Pacific Time (America/Los_Angeles)  
 **Alternative Considered:** Local time (Berlin)
@@ -266,9 +446,10 @@ Pacific Time chosen for:
 |----------|----------------|-------------------|
 | Architecture | Batch processing | Simplicity, learning focus, proven pattern |
 | Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
-| State Management | Single CSV | Atomic updates, no synchronization issues |
+| State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited API |
-| Checkpointing | Per-tweet | Negligible overhead, maximum safety |
+| Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
+| Checkpoint Cleanup | Auto-delete on success | Clean slate for next run, enables manual resume |
 | Error Recovery | @Retryable | Industry standard, handles transient failures |
 | Timezone | Pacific Time | Aligns with authoritative quota source |
 
@@ -279,8 +460,11 @@ Pacific Time chosen for:
 1. **Architecture determines tooling** - Processing model (batch vs streaming) dictates rate limiting approach
 2. **Rate limits are multi-dimensional** - RPM (easy) vs RPD (requires state management)
 3. **Simplicity scales** - Thread.sleep() sufficient when concurrent execution provides no benefit
-4. **State management is the complexity** - Focus effort on hard problems (timezone-aware quota tracking)
-5. **Proven patterns transfer** - Python thesis project validated batch + single CSV + per-item checkpointing
+4. **State management drives design** - Separate checkpoint (resume) from output (results) for clarity
+5. **Natural checkpoint points exist** - Rate limit pauses are ideal times to save state
+6. **Crash safety is cheap** - JSON write (1ms) vs API call (2000ms) = negligible overhead
+7. **User flexibility matters** - Manual cleanup strategy provides control over resume vs fresh start
+8. **Set-based lookups scale** - O(1) contains() vs O(n) CSV scan for resume performance
 
 ---
 
@@ -289,4 +473,6 @@ Pacific Time chosen for:
 - AWS: [Timeouts, Retries, and Backoff with Jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)
 - [HTTP Connection Management (MDN)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Connection_management_in_HTTP_1.x)
 - [Google Gemini API Documentation](https://ai.google.dev/gemini-api/docs/quota)
+- [Jackson ObjectMapper Documentation](https://fasterxml.github.io/jackson-databind/javadoc/2.9/com/fasterxml/jackson/databind/ObjectMapper.html)
+- [Spring Retry Reference](https://docs.spring.io/spring-retry/docs/current/reference/html/)
 - Personal reference: Python thesis project (LLM classification with Ollama)
