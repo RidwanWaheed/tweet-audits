@@ -20,6 +20,7 @@ import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
 import com.ridwan.tweetaudit.output.CSVWriter;
 import com.ridwan.tweetaudit.parser.ArchiveParser;
+import com.ridwan.tweetaudit.progress.ProgressTracker;
 import com.ridwan.tweetaudit.validation.ConfigValidator;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,6 +44,9 @@ class TweetAuditServiceTest {
     @Mock
     private ConfigValidator configValidator;
 
+    @Mock
+    private ProgressTracker progressTracker;
+
     private TweetAuditService tweetAuditService;
 
     @BeforeEach
@@ -61,6 +65,7 @@ class TweetAuditServiceTest {
             criteria,
             checkpointManager,
             configValidator,
+            progressTracker,
             batchSize,
             archivePath,
             apiKey,

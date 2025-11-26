@@ -10,6 +10,7 @@ import com.ridwan.tweetaudit.config.AlignmentCriteria;
 import com.ridwan.tweetaudit.model.ProcessingCheckpoint;
 import com.ridwan.tweetaudit.output.CSVWriter;
 import com.ridwan.tweetaudit.parser.ArchiveParser;
+import com.ridwan.tweetaudit.progress.ProgressTracker;
 import com.ridwan.tweetaudit.validation.ConfigValidator;
 
 import java.util.ArrayList;
@@ -32,6 +33,7 @@ public class TweetAuditService implements CommandLineRunner {
   private final AlignmentCriteria criteria;
   private final CheckpointManager checkpointManager;
   private final ConfigValidator configValidator;
+  private final ProgressTracker progressTracker;
   private final int batchSize;
   private final String archivePath;
   private final String apiKey;
@@ -44,6 +46,7 @@ public class TweetAuditService implements CommandLineRunner {
       AlignmentCriteria criteria,
       CheckpointManager checkpointManager,
       ConfigValidator configValidator,
+      ProgressTracker progressTracker,
       @Value("${tweet.processing.batch-size}") int batchSize,
       @Value("${archive.input-path}") String archivePath,
       @Value("${gemini.api.key}") String apiKey,
@@ -54,6 +57,7 @@ public class TweetAuditService implements CommandLineRunner {
     this.criteria = criteria;
     this.checkpointManager = checkpointManager;
     this.configValidator = configValidator;
+    this.progressTracker = progressTracker;
     this.batchSize = batchSize;
     this.archivePath = archivePath;
     this.apiKey = apiKey;
@@ -108,6 +112,9 @@ public class TweetAuditService implements CommandLineRunner {
         totalBatches,
         batchSize);
 
+    // Start progress tracking
+    progressTracker.start(remainingTweets.size());
+
     for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
       int startIdx = batchNum * batchSize;
       int endIdx = Math.min(startIdx + batchSize, remainingTweets.size());
@@ -124,6 +131,10 @@ public class TweetAuditService implements CommandLineRunner {
           if (result.isShouldDelete()) {
             flaggedCount++;
           }
+
+          // Update progress
+          progressTracker.increment();
+
         } catch (Exception e) {
           log.error("Failed to evaluate tweet {}: {}", tweet.getIdStr(), e.getMessage());
           TweetEvaluationResult errorResult =
@@ -136,6 +147,9 @@ public class TweetAuditService implements CommandLineRunner {
           results.add(errorResult);
           processedTweetIds.add(tweet.getIdStr());
           errorCount++;
+
+          // Update progress even on error
+          progressTracker.increment();
         }
       }
 
@@ -156,6 +170,9 @@ public class TweetAuditService implements CommandLineRunner {
         Thread.sleep(60000);
       }
     }
+
+    // Complete progress tracking
+    progressTracker.complete();
 
     log.info("Evaluation complete. Writing results to CSV...");
     csvWriter.writeResults(results);
