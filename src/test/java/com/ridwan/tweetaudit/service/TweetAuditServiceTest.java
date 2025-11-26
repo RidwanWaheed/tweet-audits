@@ -13,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.ridwan.tweetaudit.checkpoint.CheckpointManager;
 import com.ridwan.tweetaudit.client.GeminiClient;
 import com.ridwan.tweetaudit.config.AlignmentCriteria;
 import com.ridwan.tweetaudit.model.Tweet;
@@ -35,17 +36,24 @@ class TweetAuditServiceTest {
     @Mock
     private AlignmentCriteria criteria;
 
+    @Mock
+    private CheckpointManager checkpointManager;
+
     private TweetAuditService tweetAuditService;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         String archivePath = "test-archive.js";
         int batchSize = 10;
+
+        when(checkpointManager.loadCheckpoint()).thenReturn(null);
+
         tweetAuditService = new TweetAuditService(
             archiveParser,
             geminiClient,
             csvWriter,
             criteria,
+            checkpointManager,
             batchSize,
             archivePath
         );
@@ -81,6 +89,8 @@ class TweetAuditServiceTest {
         verify(archiveParser, times(1)).parseTweets(anyString());
         verify(geminiClient, times(2)).evaluateTweet(any(Tweet.class), any(AlignmentCriteria.class));
         verify(csvWriter, times(1)).writeResults(anyList());
+        verify(checkpointManager, times(1)).loadCheckpoint();
+        verify(checkpointManager, times(1)).deleteCheckpoint();
     }
 
     @Test
@@ -106,6 +116,7 @@ class TweetAuditServiceTest {
         verify(archiveParser, times(1)).parseTweets(anyString());
         verify(geminiClient, times(2)).evaluateTweet(any(Tweet.class), any(AlignmentCriteria.class));
         verify(csvWriter, times(1)).writeResults(anyList());
+        verify(checkpointManager, times(1)).deleteCheckpoint();
     }
 
     @Test
@@ -121,5 +132,6 @@ class TweetAuditServiceTest {
         tweetAuditService.run();
 
         verify(csvWriter, times(1)).writeResults(anyList());
+        verify(checkpointManager, times(1)).deleteCheckpoint();
     }
 }
