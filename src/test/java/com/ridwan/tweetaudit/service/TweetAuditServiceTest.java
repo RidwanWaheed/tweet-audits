@@ -20,6 +20,7 @@ import com.ridwan.tweetaudit.model.Tweet;
 import com.ridwan.tweetaudit.model.TweetEvaluationResult;
 import com.ridwan.tweetaudit.output.CSVWriter;
 import com.ridwan.tweetaudit.parser.ArchiveParser;
+import com.ridwan.tweetaudit.validation.ConfigValidator;
 
 @ExtendWith(MockitoExtension.class)
 class TweetAuditServiceTest {
@@ -39,11 +40,16 @@ class TweetAuditServiceTest {
     @Mock
     private CheckpointManager checkpointManager;
 
+    @Mock
+    private ConfigValidator configValidator;
+
     private TweetAuditService tweetAuditService;
 
     @BeforeEach
     void setUp() throws Exception {
         String archivePath = "test-archive.js";
+        String apiKey = "test-api-key-that-is-long-enough";
+        String outputPath = "test-output.csv";
         int batchSize = 10;
 
         when(checkpointManager.loadCheckpoint()).thenReturn(null);
@@ -54,8 +60,11 @@ class TweetAuditServiceTest {
             csvWriter,
             criteria,
             checkpointManager,
+            configValidator,
             batchSize,
-            archivePath
+            archivePath,
+            apiKey,
+            outputPath
         );
     }
 

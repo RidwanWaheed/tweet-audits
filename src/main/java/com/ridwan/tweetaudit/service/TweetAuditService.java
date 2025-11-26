@@ -10,6 +10,7 @@ import com.ridwan.tweetaudit.config.AlignmentCriteria;
 import com.ridwan.tweetaudit.model.ProcessingCheckpoint;
 import com.ridwan.tweetaudit.output.CSVWriter;
 import com.ridwan.tweetaudit.parser.ArchiveParser;
+import com.ridwan.tweetaudit.validation.ConfigValidator;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -30,8 +31,11 @@ public class TweetAuditService implements CommandLineRunner {
   private final CSVWriter csvWriter;
   private final AlignmentCriteria criteria;
   private final CheckpointManager checkpointManager;
+  private final ConfigValidator configValidator;
   private final int batchSize;
   private final String archivePath;
+  private final String apiKey;
+  private final String outputPath;
 
   public TweetAuditService(
       ArchiveParser archiveParser,
@@ -39,20 +43,29 @@ public class TweetAuditService implements CommandLineRunner {
       CSVWriter csvWriter,
       AlignmentCriteria criteria,
       CheckpointManager checkpointManager,
+      ConfigValidator configValidator,
       @Value("${tweet.processing.batch-size}") int batchSize,
-      @Value("${archive.input-path}") String archivePath) {
+      @Value("${archive.input-path}") String archivePath,
+      @Value("${gemini.api.key}") String apiKey,
+      @Value("${output.csv-path}") String outputPath) {
     this.archiveParser = archiveParser;
     this.geminiClient = geminiClient;
     this.csvWriter = csvWriter;
     this.criteria = criteria;
     this.checkpointManager = checkpointManager;
+    this.configValidator = configValidator;
     this.batchSize = batchSize;
     this.archivePath = archivePath;
+    this.apiKey = apiKey;
+    this.outputPath = outputPath;
   }
 
   @Override
   public void run(String... args) throws Exception {
     log.info("Starting tweet audit process...");
+
+    configValidator.validateConfiguration(apiKey, archivePath, outputPath, criteria, batchSize);
+
     log.info("Loading tweets from: {}", archivePath);
 
     List<Tweet> tweets = archiveParser.parseTweets(archivePath);
