@@ -52,26 +52,20 @@ public class GeminiClient {
   }
 
   private String buildPrompt(Tweet tweet, AlignmentCriteria criteria) {
-    String prompt =
-        """
-        You are evaluating tweets for a %s.
+    StringBuilder promptBuilder = new StringBuilder();
+    promptBuilder.append("You are evaluating tweets for a ").append(criteria.getContext()).append(".\n\n");
+    promptBuilder.append("Analyze this tweet and determine if it should be deleted based on these criteria:\n");
+    promptBuilder.append("- Forbidden content/topics: ").append(String.join(", ", criteria.getForbiddenWords())).append("\n");
 
-        Analyze this tweet and determine if it should be deleted based on these criteria:
-        - Forbidden words: %s
-        - Must be professional: %s
-        - Desired tone: %s
+    if (criteria.isCheckProfessionalism()) {
+      promptBuilder.append("- Must be professional: yes\n");
+    }
 
-        Tweet: "%s"
+    promptBuilder.append("- Desired tone: ").append(criteria.getDesiredTone()).append("\n\n");
+    promptBuilder.append("Tweet: \"").append(tweet.getFullText()).append("\"\n\n");
+    promptBuilder.append("Should this tweet be deleted? If yes, explain why and which criteria it violates.");
 
-        Should this tweet be deleted? If yes, explain why and which criteria it violates.
-        """
-            .formatted(
-                criteria.getContext(),
-                String.join(", ", criteria.getForbiddenWords()),
-                criteria.isCheckProfessionalism() ? "yes" : "no",
-                criteria.getDesiredTone(),
-                tweet.getFullText());
-    return prompt;
+    return promptBuilder.toString();
   }
 
   private Map<String, Object> buildJsonSchema() {
