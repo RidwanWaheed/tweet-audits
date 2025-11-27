@@ -96,6 +96,8 @@ public class TweetAuditService implements CommandLineRunner {
     } else {
       processedTweetIds = new HashSet<>();
       log.info("No checkpoint found, starting fresh");
+      // Clear CSV file when starting fresh to avoid duplicates from previous runs
+      csvWriter.clearResults();
     }
 
     final Set<String> processed = processedTweetIds;

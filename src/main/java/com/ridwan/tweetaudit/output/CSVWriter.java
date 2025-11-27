@@ -26,6 +26,19 @@ public class CSVWriter {
     this.outputPath = outputPath;
   }
 
+  /**
+   * Clear the CSV file and reset header tracking.
+   * Called when starting fresh (no checkpoint) to avoid duplicates from previous runs.
+   */
+  public void clearResults() throws IOException {
+    Path path = Paths.get(outputPath);
+    if (Files.exists(path)) {
+      Files.delete(path);
+      log.info("Cleared existing CSV file: {}", outputPath);
+    }
+    headerWritten = false;
+  }
+
   public void writeResults(List<TweetEvaluationResult> results) throws IOException {
     log.info("Writing results to CSV: {}", outputPath);
 
