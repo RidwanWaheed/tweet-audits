@@ -54,6 +54,7 @@ LEARNING_NOTES.md
 
 # API Keys and secrets (NEVER COMMIT THESE)
 application-local.properties
+application-dev.properties
 *.env
 .env
 secrets/

@@ -111,9 +111,10 @@ https://x.com/i/status/67890,67890,ERROR,,API timeout after 3 retries
 
    1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
    2. Create an API key
-   3. Set it as an environment variable:
-      ```bash
-      export GEMINI_API_KEY=your_gemini_api_key_here
+   3. Create `src/main/resources/application-dev.properties`:
+      ```properties
+      # Development secrets (this file is gitignored)
+      GEMINI_API_KEY=your_gemini_api_key_here
       ```
 
 3. **Clone and build:**
@@ -123,7 +124,7 @@ https://x.com/i/status/67890,67890,ERROR,,API timeout after 3 retries
 
 4. **Run the application:**
    ```bash
-   mvn spring-boot:run
+   mvn spring-boot:run -Dspring-boot.run.profiles=dev
    ```
 
 5. **Check the results:**
@@ -147,12 +148,24 @@ Test coverage includes:
 
 ## Configuration
 
-### Environment Variables
+### Spring Profiles
 
-Set your Gemini API key:
+The application uses Spring Profiles for environment-specific configuration:
+
+**Development (local):**
 ```bash
-export GEMINI_API_KEY=your_gemini_api_key_here
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
+- Uses `application-dev.properties` (gitignored)
+- Contains your API key locally
+
+**Production:**
+```bash
+export GEMINI_API_KEY=your_key_from_secure_vault
+mvn spring-boot:run -Dspring-boot.run.profiles=prod
+```
+- Uses `application-prod.properties` (committed, no secrets)
+- Reads API key from environment variable
 
 ### Alignment Criteria
 
