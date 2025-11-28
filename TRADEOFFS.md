@@ -189,6 +189,37 @@ See: `AdaptiveRateLimiter.java` with 12 comprehensive unit tests covering:
 
 ---
 
+## 2.3. Graceful Shutdown on Quota Exhaustion
+
+**Decision:** Protected method extraction for shutdown behavior
+**Alternatives Considered:** Direct System.exit(), environment checks, dependency injection
+
+### Comparison
+
+| Approach | Testable | Complexity | Flexibility |
+|----------|----------|------------|-------------|
+| Direct System.exit() | No | Very Low | None |
+| Environment checks | Yes | Low | Low |
+| **Protected method (Chosen)** | **Yes** | **Low** | **Medium** |
+| DI with ShutdownHandler | Yes | Medium | High |
+
+### Rationale
+
+Protected method chosen for:
+- **Testability:** Mockito spy overrides method without terminating tests
+- **Simplicity:** Single method, no interfaces or additional classes
+- **Sufficient:** YAGNI - single use case doesn't justify DI abstraction
+- **Evolution path:** Easy to refactor to DI if multiple shutdown scenarios emerge
+
+**Key insight:** `SpringApplication.exit()` triggers cleanup but doesn't terminate JVM. Need both `SpringApplication.exit()` (cleanup) + `System.exit()` (termination).
+
+**Why not alternatives:**
+- Direct System.exit(): Untestable
+- Environment checks: Hidden dependencies, brittle
+- DI: Over-engineering for single use case
+
+---
+
 ## 3. State Management & Checkpointing
 
 **Decision:** JSON checkpoint + CSV output
@@ -569,6 +600,7 @@ Pacific Time chosen for:
 | Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
 | **Adaptive Rate Limiting** | **Response-based delay adjustment** | **Optimizes throughput, respectful behavior** |
 | **Daily Quota Tracking** | **Persistent JSON (Pacific Time)** | **Prevents quota exhaustion, timezone-correct** |
+| **Graceful Shutdown** | **Protected method extraction** | **Testable, simple, avoids over-engineering** |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited API |
 | Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
@@ -592,6 +624,9 @@ Pacific Time chosen for:
 10. **Good citizen pattern** - Fast responses → speed up, slow/errors → back off creates respectful API client behavior
 11. **Daily quotas require persistence** - 250 RPD limit spans days, in-memory tracking fails across restarts
 12. **Timezone matters for quotas** - Always track using API provider's timezone (Pacific Time for Gemini) to avoid off-by-one-day errors
+13. **SpringApplication.exit() ≠ System.exit()** - Spring cleanup method returns exit code but doesn't terminate JVM; need both for graceful shutdown
+14. **YAGNI prevents over-engineering** - Protected method sufficient; don't create interfaces/strategies until multiple use cases emerge
+15. **Testability doesn't require dependency injection** - Mockito spy can override protected methods for testing without additional abstractions
 
 ---
 

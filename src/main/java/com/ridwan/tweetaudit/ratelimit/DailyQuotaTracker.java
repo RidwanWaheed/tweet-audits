@@ -8,6 +8,8 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 
+import org.springframework.boot.SpringApplication;
+import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,12 +46,14 @@ public class DailyQuotaTracker {
   private static final ZoneId PACIFIC_TIME = ZoneId.of("America/Los_Angeles");
 
   private final ObjectMapper objectMapper;
+  private final ApplicationContext appContext;
   private final Path quotaFilePath;
 
   private QuotaState currentState;
 
-  public DailyQuotaTracker(ObjectMapper objectMapper) {
+  public DailyQuotaTracker(ObjectMapper objectMapper, ApplicationContext appContext) {
     this.objectMapper = objectMapper;
+    this.appContext = appContext;
     this.quotaFilePath = Paths.get(QUOTA_FILE_PATH);
     this.currentState = loadOrCreateQuotaState();
   }
@@ -144,13 +148,29 @@ public class DailyQuotaTracker {
 
     int remaining = getRemainingQuota();
 
-    if (remaining <= 0) {
-      String resetTime = getQuotaResetTime();
-      throw new QuotaExceededException(
-          String.format(
-              "Daily quota exhausted! Used %d/%d requests. Quota resets at %s",
-              currentState.getRequestCount(), DAILY_LIMIT, resetTime));
+if (remaining <= 0) {
+    String resetTime = getQuotaResetTime();
+    
+    log.error("═══════════════════════════════════════════════════");
+    log.error("Daily quota exhausted! ({}/{})", currentState.getRequestCount(), DAILY_LIMIT);
+    log.error("Quota resets at: {}", resetTime);
+    log.error("Initiating graceful shutdown...");
+    log.error("═══════════════════════════════════════════════════");
+    
+    // Trigger Spring cleanup (close connections, flush logs, etc.)
+    int exitCode = SpringApplication.exit(appContext, () -> 0);
+    
+    // Allow time for Spring to complete cleanup tasks
+    try {
+        Thread.sleep(500);
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        log.warn("Shutdown interrupted during cleanup");
     }
+    
+    // Actually terminate the JVM
+    performShutdown(exitCode);
+}
 
     // Log warning if approaching limit
     if (remaining <= (DAILY_LIMIT - WARNING_THRESHOLD)) {
@@ -266,9 +286,10 @@ public class DailyQuotaTracker {
     }
   }
 
-  /**
-   * Exception thrown when daily quota is exceeded.
-   */
+  protected void performShutdown(int exitCode) {
+    System.exit(exitCode);
+  }
+
   public static class QuotaExceededException extends Exception {
     public QuotaExceededException(String message) {
       super(message);

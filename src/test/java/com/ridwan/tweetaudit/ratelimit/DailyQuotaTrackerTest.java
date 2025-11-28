@@ -1,6 +1,8 @@
 package com.ridwan.tweetaudit.ratelimit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -10,6 +12,7 @@ import java.nio.file.Paths;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.ApplicationContext;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker.QuotaExceededException;
@@ -20,11 +23,13 @@ class DailyQuotaTrackerTest {
 
   private DailyQuotaTracker quotaTracker;
   private ObjectMapper objectMapper;
+  private ApplicationContext mockAppContext;
 
   @BeforeEach
   void setUp() throws IOException {
     objectMapper = new ObjectMapper();
-    quotaTracker = new DailyQuotaTracker(objectMapper);
+    mockAppContext = mock(ApplicationContext.class);
+    quotaTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
 
     // Clean state for each test
     quotaTracker.reset();
@@ -61,48 +66,57 @@ class DailyQuotaTrackerTest {
     assertTrue(Files.exists(QUOTA_FILE));
 
     // Load new tracker instance
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
 
     // Should load persisted state
     assertEquals(998, newTracker.getRemainingQuota());
   }
 
   @Test
-  void shouldThrowExceptionWhenQuotaExceeded() {
+  void shouldTriggerGracefulShutdownWhenQuotaExceeded() {
+    // Create spy to intercept shutdown without actually calling System.exit()
+    DailyQuotaTracker spyTracker = spy(quotaTracker);
+    doNothing().when(spyTracker).performShutdown(anyInt());
+
     // Exhaust quota
     for (int i = 0; i < 1000; i++) {
       quotaTracker.incrementRequestCount();
     }
 
     // Should have no remaining quota
-    assertEquals(0, quotaTracker.getRemainingQuota());
+    assertEquals(0, spyTracker.getRemainingQuota());
 
-    // Should throw exception on next check
-    QuotaExceededException exception =
-        assertThrows(QuotaExceededException.class, () -> quotaTracker.checkQuota());
+    // Should trigger graceful shutdown (not throw exception)
+    assertDoesNotThrow(() -> spyTracker.checkQuota());
 
-    assertTrue(exception.getMessage().contains("Daily quota exhausted"));
-    assertTrue(exception.getMessage().contains("1000/1000 requests"));
+    // Verify SpringApplication.exit() would have been called
+    verify(spyTracker, times(1)).performShutdown(0);
   }
 
   @Test
   void shouldAllowRequestsUpToLimit() throws QuotaExceededException {
+    // Create spy to intercept shutdown
+    DailyQuotaTracker spyTracker = spy(quotaTracker);
+    doNothing().when(spyTracker).performShutdown(anyInt());
+    
     // Use 999 requests (should be fine)
     for (int i = 0; i < 999; i++) {
-      quotaTracker.checkQuota();
-      quotaTracker.incrementRequestCount();
+      spyTracker.checkQuota();
+      spyTracker.incrementRequestCount();
     }
 
-    assertEquals(1, quotaTracker.getRemainingQuota());
+    assertEquals(1, spyTracker.getRemainingQuota());
 
     // Last request should succeed
-    assertDoesNotThrow(() -> quotaTracker.checkQuota());
-    quotaTracker.incrementRequestCount();
+    assertDoesNotThrow(() -> spyTracker.checkQuota());
+    spyTracker.incrementRequestCount();
+    assertEquals(0, spyTracker.getRemainingQuota());
 
-    assertEquals(0, quotaTracker.getRemainingQuota());
+    // Next request should trigger graceful shutdown
+    assertDoesNotThrow(() -> spyTracker.checkQuota());
 
-    // Next request should fail
-    assertThrows(QuotaExceededException.class, () -> quotaTracker.checkQuota());
+    // Verify shutdown was called
+    verify(spyTracker, times(1)).performShutdown(0);
   }
 
   @Test
@@ -122,7 +136,7 @@ class DailyQuotaTrackerTest {
     }
 
     // Create new tracker
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
 
     // Should start with full quota
     assertEquals(1000, newTracker.getRemainingQuota());
@@ -175,7 +189,7 @@ class DailyQuotaTrackerTest {
     Files.writeString(QUOTA_FILE, "invalid json content");
 
     // Should handle gracefully and create new state
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
 
     // Should start with full quota (fallback to new state)
     assertEquals(1000, newTracker.getRemainingQuota());
