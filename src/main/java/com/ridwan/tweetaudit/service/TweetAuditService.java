@@ -174,8 +174,8 @@ public class TweetAuditService implements CommandLineRunner {
 
       checkpointManager.saveCheckpoint(updatedCheckpoint);
 
-      // Write batch results to CSV incrementally
       csvWriter.appendResults(results);
+      results.clear();
 
       if (batchNum < totalBatches - 1) {
         log.info("Waiting 60 seconds before next batch (rate limiting)...");
@@ -186,16 +186,15 @@ public class TweetAuditService implements CommandLineRunner {
     // Complete progress tracking
     progressTracker.complete();
 
-    log.info("Evaluation complete. Writing results to CSV...");
-    csvWriter.writeResults(results);
+    log.info("Evaluation complete.");
 
     checkpointManager.deleteCheckpoint();
     log.info("Checkpoint deleted (processing complete)");
 
-    long cleanCount = results.size() - flaggedCount - errorCount;
+    long cleanCount = processedTweetIds.size() - flaggedCount - errorCount;
 
     log.info("=== Tweet Audit Complete ===");
-    log.info("Total tweets processed: {}", results.size());
+    log.info("Total tweets processed: {}", processedTweetIds.size());
     log.info("Clean tweets: {}", cleanCount);
     log.info("Flagged for deletion: {}", flaggedCount);
     log.info("Errors: {}", errorCount);

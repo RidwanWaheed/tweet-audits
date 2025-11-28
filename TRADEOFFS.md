@@ -281,6 +281,48 @@ JSON checkpoint + CSV output chosen for:
 
 ---
 
+## 3.1. Incremental CSV Writing
+
+**Decision:** Write flagged tweets to CSV after each batch, clear results list between batches
+**Alternatives Considered:** Write all results at end only, write after every tweet
+
+### Comparison
+
+| Approach | Crash Safety | Memory Usage | I/O Ops | Data Loss Risk |
+|----------|--------------|--------------|---------|----------------|
+| **Per-batch (Chosen)** | **High** | **Low** | **Medium** | **Max 1 batch** |
+| Final write only | None | High | Minimal | Entire run |
+| Per-tweet | Maximum | Minimal | High | 1 tweet |
+
+### Rationale
+
+Incremental batch writing chosen for:
+- **Crash resilience:** CSV contains all flagged tweets up to last completed batch
+- **Quota exhaustion safety:** When daily quota runs out mid-processing, all previous results preserved
+- **Memory efficiency:** Clear results list after each batch write (avoid accumulation)
+- **Aligns with checkpointing:** Both checkpoint and CSV written together per batch
+
+### Critical Implementation Detail
+
+**Must clear results list after writing:**
+```java
+csvWriter.appendResults(results);  // Write batch to CSV
+results.clear();                   // Clear to prevent accumulation
+```
+
+**Without clearing:** Results accumulate across batches causing exponential duplicates:
+- Batch 1: Writes 15 tweets (15 total)
+- Batch 2: Writes 30 tweets (batch 1 + batch 2 = 15 duplicates)
+- Batch 3: Writes 45 tweets (batch 1+2+3 = 30 duplicates)
+
+**With clearing:** Each tweet written exactly once to CSV.
+
+**Why not alternatives:**
+- Final write only: Lose all data on crash or quota exhaustion
+- Per-tweet: 10x more I/O operations, adds complexity to processing loop
+
+---
+
 ## 4. Concurrency Model
 
 **Decision:** Sequential processing  
