@@ -107,7 +107,8 @@ class TweetAuditServiceTest {
 
         verify(archiveParser, times(1)).parseTweets(anyString());
         verify(geminiClient, times(2)).evaluateTweet(any(Tweet.class), any(AlignmentCriteria.class));
-        verify(csvWriter, times(1)).writeResults(anyList());
+        verify(csvWriter, times(1)).clearResults(); // Clear CSV at start
+        verify(csvWriter, times(1)).appendResults(anyList()); // Append results after batch
         verify(checkpointManager, times(1)).loadCheckpoint();
         verify(checkpointManager, times(1)).deleteCheckpoint();
     }
@@ -134,7 +135,8 @@ class TweetAuditServiceTest {
 
         verify(archiveParser, times(1)).parseTweets(anyString());
         verify(geminiClient, times(2)).evaluateTweet(any(Tweet.class), any(AlignmentCriteria.class));
-        verify(csvWriter, times(1)).writeResults(anyList());
+        verify(csvWriter, times(1)).clearResults(); // Clear CSV at start
+        verify(csvWriter, times(1)).appendResults(anyList()); // Append results after batch
         verify(checkpointManager, times(1)).deleteCheckpoint();
     }
 
@@ -150,7 +152,8 @@ class TweetAuditServiceTest {
 
         tweetAuditService.run();
 
-        verify(csvWriter, times(1)).writeResults(anyList());
+        verify(csvWriter, times(1)).clearResults(); // Clear CSV at start
+        verify(csvWriter, times(1)).appendResults(anyList()); // Append results after batch
         verify(checkpointManager, times(1)).deleteCheckpoint();
     }
 }

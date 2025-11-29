@@ -220,6 +220,46 @@ Protected method chosen for:
 
 ---
 
+## 2.4. Quota Safety Threshold
+
+**Decision:** Configurable safety threshold at 95% of daily limit (950/1000 requests)
+**Alternatives Considered:** Full quota utilization (1000), 99% threshold (990), 90% threshold (900)
+
+### Problem Statement
+
+Production testing revealed quota tracking mismatch:
+- Client tracker: 997/1000 requests (3 remaining)
+- Gemini API response: 429 Rate Limit Exceeded
+
+Root causes: Clock drift between client/server, race conditions in quota increment timing, retry logic discrepancies, and distributed system timing issues.
+
+### Approach Comparison
+
+| Threshold | Buffer | Quota Waste | Risk Level |
+|-----------|--------|-------------|------------|
+| 1000 (100%) | 0 requests | None | High - proven to fail |
+| 990 (99%) | 10 requests | Minimal | Medium |
+| **950 (95%)** | **50 requests** | **5%** | **Low** |
+| 900 (90%) | 100 requests | 10% | Very Low |
+
+### Industry Standards
+
+Major API providers recommend 5-10% safety margins:
+- **AWS Lambda**: 90% threshold (900/1000 concurrent executions)
+- **Stripe API**: 80-90% throttling (80-90 req/sec of 100 limit)
+- **GitHub API**: 90% threshold (4500/5000 req/hour)
+- **Google Cloud**: Monitor at 80-90%, alert at 95%
+
+Common pattern: Warn at 80-90%, hard stop at 95%.
+
+**Decision factors:**
+- Observed 3-request gap in production; 50-request buffer provides 16.6x margin
+- Matches Google Cloud's recommended alert threshold
+- Configurable via `quota.safety-threshold` property
+- 5% quota waste prevents cascading failures
+
+---
+
 ## 3. State Management & Checkpointing
 
 **Decision:** JSON checkpoint + CSV output
@@ -642,6 +682,7 @@ Pacific Time chosen for:
 | Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
 | **Adaptive Rate Limiting** | **Response-based delay adjustment** | **Optimizes throughput, respectful behavior** |
 | **Daily Quota Tracking** | **Persistent JSON (Pacific Time)** | **Prevents quota exhaustion, timezone-correct** |
+| **Quota Safety Threshold** | **Configurable 95% threshold (950/1000)** | **Prevents 429 errors from clock drift/race conditions** |
 | **Graceful Shutdown** | **Protected method extraction** | **Testable, simple, avoids over-engineering** |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited API |
@@ -669,6 +710,8 @@ Pacific Time chosen for:
 13. **SpringApplication.exit() ≠ System.exit()** - Spring cleanup method returns exit code but doesn't terminate JVM; need both for graceful shutdown
 14. **YAGNI prevents over-engineering** - Protected method sufficient; don't create interfaces/strategies until multiple use cases emerge
 15. **Testability doesn't require dependency injection** - Mockito spy can override protected methods for testing without additional abstractions
+16. **Client-side quota tracking requires safety margins** - Distributed system timing issues (clock drift, race conditions) mean 1000/1000 fails; industry standard is 90-95% threshold
+17. **Production testing validates architecture decisions** - Observed 997/1000 → 429 error proves need for safety buffer; real-world feedback > theoretical design
 
 ---
 

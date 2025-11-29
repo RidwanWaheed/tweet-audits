@@ -20,6 +20,8 @@ import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker.QuotaExceededException;
 class DailyQuotaTrackerTest {
 
   private static final Path QUOTA_FILE = Paths.get("results/daily_quota.json");
+  private static final int DAILY_LIMIT = 1000;
+  private static final int SAFETY_THRESHOLD = 950;
 
   private DailyQuotaTracker quotaTracker;
   private ObjectMapper objectMapper;
@@ -29,7 +31,7 @@ class DailyQuotaTrackerTest {
   void setUp() throws IOException {
     objectMapper = new ObjectMapper();
     mockAppContext = mock(ApplicationContext.class);
-    quotaTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
+    quotaTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
 
     // Clean state for each test
     quotaTracker.reset();
@@ -45,7 +47,8 @@ class DailyQuotaTrackerTest {
 
   @Test
   void shouldStartWithFullQuota() {
-    assertEquals(1000, quotaTracker.getRemainingQuota());
+    // Remaining quota should be based on safety threshold
+    assertEquals(SAFETY_THRESHOLD, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -53,7 +56,7 @@ class DailyQuotaTrackerTest {
     quotaTracker.checkQuota();
     quotaTracker.incrementRequestCount();
 
-    assertEquals(999, quotaTracker.getRemainingQuota());
+    assertEquals(SAFETY_THRESHOLD - 1, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -66,20 +69,20 @@ class DailyQuotaTrackerTest {
     assertTrue(Files.exists(QUOTA_FILE));
 
     // Load new tracker instance
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
 
     // Should load persisted state
-    assertEquals(998, newTracker.getRemainingQuota());
+    assertEquals(SAFETY_THRESHOLD - 2, newTracker.getRemainingQuota());
   }
 
   @Test
-  void shouldTriggerGracefulShutdownWhenQuotaExceeded() {
+  void shouldTriggerGracefulShutdownWhenSafetyThresholdReached() {
     // Create spy to intercept shutdown without actually calling System.exit()
     DailyQuotaTracker spyTracker = spy(quotaTracker);
     doNothing().when(spyTracker).performShutdown(anyInt());
 
-    // Exhaust quota
-    for (int i = 0; i < 1000; i++) {
+    // Reach safety threshold
+    for (int i = 0; i < SAFETY_THRESHOLD; i++) {
       quotaTracker.incrementRequestCount();
     }
 
@@ -94,20 +97,20 @@ class DailyQuotaTrackerTest {
   }
 
   @Test
-  void shouldAllowRequestsUpToLimit() throws QuotaExceededException {
+  void shouldAllowRequestsUpToSafetyThreshold() throws QuotaExceededException {
     // Create spy to intercept shutdown
     DailyQuotaTracker spyTracker = spy(quotaTracker);
     doNothing().when(spyTracker).performShutdown(anyInt());
-    
-    // Use 999 requests (should be fine)
-    for (int i = 0; i < 999; i++) {
+
+    // Use up to safety threshold - 1 (should be fine)
+    for (int i = 0; i < SAFETY_THRESHOLD - 1; i++) {
       spyTracker.checkQuota();
       spyTracker.incrementRequestCount();
     }
 
     assertEquals(1, spyTracker.getRemainingQuota());
 
-    // Last request should succeed
+    // Last request before threshold should succeed
     assertDoesNotThrow(() -> spyTracker.checkQuota());
     spyTracker.incrementRequestCount();
     assertEquals(0, spyTracker.getRemainingQuota());
@@ -125,7 +128,7 @@ class DailyQuotaTrackerTest {
       quotaTracker.incrementRequestCount();
     }
 
-    assertEquals(990, quotaTracker.getRemainingQuota());
+    assertEquals(SAFETY_THRESHOLD - 10, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -136,10 +139,10 @@ class DailyQuotaTrackerTest {
     }
 
     // Create new tracker
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
 
-    // Should start with full quota
-    assertEquals(1000, newTracker.getRemainingQuota());
+    // Should start with full quota (based on safety threshold)
+    assertEquals(SAFETY_THRESHOLD, newTracker.getRemainingQuota());
 
     // Should create file after first increment
     newTracker.incrementRequestCount();
@@ -153,13 +156,13 @@ class DailyQuotaTrackerTest {
       quotaTracker.incrementRequestCount();
     }
 
-    assertEquals(950, quotaTracker.getRemainingQuota());
+    assertEquals(SAFETY_THRESHOLD - 50, quotaTracker.getRemainingQuota());
 
     // Reset quota
     quotaTracker.reset();
 
-    // Should have full quota again
-    assertEquals(1000, quotaTracker.getRemainingQuota());
+    // Should have full quota again (based on safety threshold)
+    assertEquals(SAFETY_THRESHOLD, quotaTracker.getRemainingQuota());
   }
 
   @Test
@@ -189,26 +192,63 @@ class DailyQuotaTrackerTest {
     Files.writeString(QUOTA_FILE, "invalid json content");
 
     // Should handle gracefully and create new state
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
 
-    // Should start with full quota (fallback to new state)
-    assertEquals(1000, newTracker.getRemainingQuota());
+    // Should start with full quota (fallback to new state, based on safety threshold)
+    assertEquals(SAFETY_THRESHOLD, newTracker.getRemainingQuota());
   }
 
   @Test
-  void shouldReturnZeroWhenQuotaExhausted() {
-    // Exhaust quota
-    for (int i = 0; i < 1000; i++) {
+  void shouldReturnZeroWhenSafetyThresholdExhausted() {
+    // Exhaust safety threshold
+    for (int i = 0; i < SAFETY_THRESHOLD; i++) {
       quotaTracker.incrementRequestCount();
     }
 
     // Should return exactly 0, not negative
     assertEquals(0, quotaTracker.getRemainingQuota());
 
-    // Increment beyond limit
+    // Increment beyond threshold
     quotaTracker.incrementRequestCount();
 
     // Should still return 0, not negative
     assertEquals(0, quotaTracker.getRemainingQuota());
+  }
+
+  @Test
+  void shouldShutdownBeforeReachingActualDailyLimit() {
+    // Create spy to intercept shutdown
+    DailyQuotaTracker spyTracker = spy(quotaTracker);
+    doNothing().when(spyTracker).performShutdown(anyInt());
+
+    // Use requests up to safety threshold
+    for (int i = 0; i < SAFETY_THRESHOLD; i++) {
+      spyTracker.incrementRequestCount();
+    }
+
+    // Trigger shutdown at safety threshold (950)
+    assertDoesNotThrow(() -> spyTracker.checkQuota());
+    verify(spyTracker, times(1)).performShutdown(0);
+
+    // This ensures we stopped BEFORE hitting the actual daily limit (1000)
+    // Leaving a 50-request safety margin
+  }
+
+  @Test
+  void shouldNotShutdownJustBeforeSafetyThreshold() throws QuotaExceededException {
+    // Create spy to intercept shutdown
+    DailyQuotaTracker spyTracker = spy(quotaTracker);
+    doNothing().when(spyTracker).performShutdown(anyInt());
+
+    // Use requests up to 1 before safety threshold
+    for (int i = 0; i < SAFETY_THRESHOLD - 1; i++) {
+      spyTracker.incrementRequestCount();
+    }
+
+    // Should not trigger shutdown yet
+    assertDoesNotThrow(() -> spyTracker.checkQuota());
+    verify(spyTracker, never()).performShutdown(anyInt());
+
+    assertEquals(1, spyTracker.getRemainingQuota());
   }
 }

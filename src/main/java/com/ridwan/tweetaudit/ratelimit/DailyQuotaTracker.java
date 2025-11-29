@@ -8,6 +8,7 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.SpringApplication;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
@@ -25,7 +26,7 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>Persistent tracking across application restarts
  *   <li>Automatic reset at midnight Pacific Time (Gemini's quota reset schedule)
  *   <li>Pre-flight quota checks before processing
- *   <li>Warning logs when approaching daily limit
+ *   <li>Configurable safety threshold to prevent quota overruns
  *   <li>Graceful stopping before hitting quota
  * </ul>
  *
@@ -35,26 +36,41 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>15 Requests Per Minute (RPM) - handled by AdaptiveRateLimiter
  *   <li>1,000 Requests Per Day (RPD) - handled by this tracker
  * </ul>
+ *
+ * <p>Safety Threshold:
+ *
+ * <ul>
+ *   <li>Configurable via quota.safety-threshold property
+ *   <li>Default: 950 (95% of daily limit)
+ *   <li>Accounts for clock drift, race conditions, retry logic
+ *   <li>50-request buffer provides margin for distributed system timing issues
+ * </ul>
  */
 @Component
 @Slf4j
 public class DailyQuotaTracker {
 
-  private static final int DAILY_LIMIT = 1000;
-  private static final int WARNING_THRESHOLD = 950; // Warn at 95% usage
   private static final String QUOTA_FILE_PATH = "results/daily_quota.json";
   private static final ZoneId PACIFIC_TIME = ZoneId.of("America/Los_Angeles");
 
   private final ObjectMapper objectMapper;
   private final ApplicationContext appContext;
   private final Path quotaFilePath;
+  private final int dailyLimit;
+  private final int safetyThreshold;
 
   private QuotaState currentState;
 
-  public DailyQuotaTracker(ObjectMapper objectMapper, ApplicationContext appContext) {
+  public DailyQuotaTracker(
+      ObjectMapper objectMapper,
+      ApplicationContext appContext,
+      @Value("${quota.daily-limit}") int dailyLimit,
+      @Value("${quota.safety-threshold}") int safetyThreshold) {
     this.objectMapper = objectMapper;
     this.appContext = appContext;
     this.quotaFilePath = Paths.get(QUOTA_FILE_PATH);
+    this.dailyLimit = dailyLimit;
+    this.safetyThreshold = safetyThreshold;
     this.currentState = loadOrCreateQuotaState();
   }
 
@@ -141,43 +157,51 @@ public class DailyQuotaTracker {
   /**
    * Check if there's remaining quota before making a request.
    *
-   * @throws QuotaExceededException if daily quota would be exceeded
+   * <p>Uses safety threshold instead of absolute daily limit to account for:
+   * <ul>
+   *   <li>Clock drift between client and Gemini servers
+   *   <li>Race conditions in concurrent request processing
+   *   <li>Retry logic that may count failed requests
+   * </ul>
+   *
+   * @throws QuotaExceededException if safety threshold would be exceeded
    */
   public void checkQuota() throws QuotaExceededException {
     resetIfNewDay();
 
-    int remaining = getRemainingQuota();
+    if (currentState.getRequestCount() >= safetyThreshold) {
+      String resetTime = getQuotaResetTime();
 
-if (remaining <= 0) {
-    String resetTime = getQuotaResetTime();
-    
-    log.error("═══════════════════════════════════════════════════");
-    log.error("Daily quota exhausted! ({}/{})", currentState.getRequestCount(), DAILY_LIMIT);
-    log.error("Quota resets at: {}", resetTime);
-    log.error("Initiating graceful shutdown...");
-    log.error("═══════════════════════════════════════════════════");
-    
-    // Trigger Spring cleanup (close connections, flush logs, etc.)
-    int exitCode = SpringApplication.exit(appContext, () -> 0);
-    
-    // Allow time for Spring to complete cleanup tasks
-    try {
-        Thread.sleep(500);
-    } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        log.warn("Shutdown interrupted during cleanup");
+      log.error("═══════════════════════════════════════════════════");
+      log.error("Safety threshold reached! ({}/{})", currentState.getRequestCount(), safetyThreshold);
+      log.error("Daily limit: {}, Safety margin: {} requests", dailyLimit, dailyLimit - safetyThreshold);
+      log.error("Quota resets at: {}", resetTime);
+      log.error("Initiating graceful shutdown...");
+      log.error("═══════════════════════════════════════════════════");
+
+      // Trigger Spring cleanup (close connections, flush logs, etc.)
+      int exitCode = SpringApplication.exit(appContext, () -> 0);
+
+      // Allow time for Spring to complete cleanup tasks
+      try {
+          Thread.sleep(500);
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          log.warn("Shutdown interrupted during cleanup");
+      }
+
+      // Actually terminate the JVM
+      performShutdown(exitCode);
     }
-    
-    // Actually terminate the JVM
-    performShutdown(exitCode);
-}
 
-    // Log warning if approaching limit
-    if (remaining <= (DAILY_LIMIT - WARNING_THRESHOLD)) {
+    // Log warning if approaching safety threshold (at 90% of threshold)
+    int warningPoint = (int) (safetyThreshold * 0.9);
+    if (currentState.getRequestCount() >= warningPoint && currentState.getRequestCount() < safetyThreshold) {
       log.warn(
-          "⚠️  Approaching daily quota limit! Remaining: {} requests ({}% used)",
-          remaining,
-          (currentState.getRequestCount() * 100) / DAILY_LIMIT);
+          "⚠️  Approaching safety threshold! Used: {}/{} requests ({}% of threshold)",
+          currentState.getRequestCount(),
+          safetyThreshold,
+          (currentState.getRequestCount() * 100) / safetyThreshold);
     }
   }
 
@@ -192,20 +216,21 @@ if (remaining <= 0) {
 
     int remaining = getRemainingQuota();
     log.debug(
-        "Quota updated: {}/{} requests used, {} remaining",
+        "Quota updated: {}/{} requests used (threshold: {}), {} remaining",
         currentState.getRequestCount(),
-        DAILY_LIMIT,
+        dailyLimit,
+        safetyThreshold,
         remaining);
   }
 
   /**
-   * Get remaining quota for today.
+   * Get remaining quota for today (based on safety threshold).
    *
-   * @return Number of requests remaining
+   * @return Number of requests remaining before hitting safety threshold
    */
   public int getRemainingQuota() {
     resetIfNewDay();
-    return Math.max(0, DAILY_LIMIT - currentState.getRequestCount());
+    return Math.max(0, safetyThreshold - currentState.getRequestCount());
   }
 
   /**
@@ -229,18 +254,22 @@ if (remaining <= 0) {
     resetIfNewDay();
 
     int remaining = getRemainingQuota();
-    int percentUsed = (currentState.getRequestCount() * 100) / DAILY_LIMIT;
+    int percentUsed = (currentState.getRequestCount() * 100) / dailyLimit;
+    int percentOfThreshold = (currentState.getRequestCount() * 100) / safetyThreshold;
 
     log.info(
         "=== Daily Quota Status ===\n"
             + "  Date: {}\n"
-            + "  Used: {}/{} requests ({}%)\n"
+            + "  Used: {}/{} requests ({}% of daily limit)\n"
+            + "  Safety threshold: {} ({}% used)\n"
             + "  Remaining: {} requests\n"
             + "  Resets: {}",
         currentState.getCurrentDate(),
         currentState.getRequestCount(),
-        DAILY_LIMIT,
+        dailyLimit,
         percentUsed,
+        safetyThreshold,
+        percentOfThreshold,
         remaining,
         getQuotaResetTime());
   }
