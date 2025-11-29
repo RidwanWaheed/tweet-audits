@@ -50,7 +50,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class DailyQuotaTracker {
 
-  private static final String QUOTA_FILE_PATH = "results/daily_quota.json";
   private static final ZoneId PACIFIC_TIME = ZoneId.of("America/Los_Angeles");
 
   private final ObjectMapper objectMapper;
@@ -65,10 +64,11 @@ public class DailyQuotaTracker {
       ObjectMapper objectMapper,
       ApplicationContext appContext,
       @Value("${quota.daily-limit}") int dailyLimit,
-      @Value("${quota.safety-threshold}") int safetyThreshold) {
+      @Value("${quota.safety-threshold}") int safetyThreshold,
+      @Value("${quota.file-path:results/daily_quota.json}") String quotaFilePath) {
     this.objectMapper = objectMapper;
     this.appContext = appContext;
-    this.quotaFilePath = Paths.get(QUOTA_FILE_PATH);
+    this.quotaFilePath = Paths.get(quotaFilePath);
     this.dailyLimit = dailyLimit;
     this.safetyThreshold = safetyThreshold;
     this.currentState = loadOrCreateQuotaState();

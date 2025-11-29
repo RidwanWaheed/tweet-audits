@@ -19,9 +19,10 @@ import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker.QuotaExceededException;
 
 class DailyQuotaTrackerTest {
 
-  private static final Path QUOTA_FILE = Paths.get("results/daily_quota.json");
+  private static final Path QUOTA_FILE = Paths.get("test-results/daily_quota.json");
   private static final int DAILY_LIMIT = 1000;
   private static final int SAFETY_THRESHOLD = 950;
+  private static final String QUOTA_FILE_PATH = "test-results/daily_quota.json";
 
   private DailyQuotaTracker quotaTracker;
   private ObjectMapper objectMapper;
@@ -31,7 +32,7 @@ class DailyQuotaTrackerTest {
   void setUp() throws IOException {
     objectMapper = new ObjectMapper();
     mockAppContext = mock(ApplicationContext.class);
-    quotaTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
+    quotaTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD, QUOTA_FILE_PATH);
 
     // Clean state for each test
     quotaTracker.reset();
@@ -69,7 +70,7 @@ class DailyQuotaTrackerTest {
     assertTrue(Files.exists(QUOTA_FILE));
 
     // Load new tracker instance
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD, QUOTA_FILE_PATH);
 
     // Should load persisted state
     assertEquals(SAFETY_THRESHOLD - 2, newTracker.getRemainingQuota());
@@ -139,7 +140,7 @@ class DailyQuotaTrackerTest {
     }
 
     // Create new tracker
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD, QUOTA_FILE_PATH);
 
     // Should start with full quota (based on safety threshold)
     assertEquals(SAFETY_THRESHOLD, newTracker.getRemainingQuota());
@@ -192,7 +193,7 @@ class DailyQuotaTrackerTest {
     Files.writeString(QUOTA_FILE, "invalid json content");
 
     // Should handle gracefully and create new state
-    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD);
+    DailyQuotaTracker newTracker = new DailyQuotaTracker(objectMapper, mockAppContext, DAILY_LIMIT, SAFETY_THRESHOLD, QUOTA_FILE_PATH);
 
     // Should start with full quota (fallback to new state, based on safety threshold)
     assertEquals(SAFETY_THRESHOLD, newTracker.getRemainingQuota());
