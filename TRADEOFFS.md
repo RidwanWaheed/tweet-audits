@@ -1,16 +1,16 @@
 # Architecture and Design Tradeoffs
 
-**Project:** Tweet Audit  
-**Author:** Ridwan  
-**Date:** January 2025  
-**Purpose:** Document key architectural decisions and their tradeoffs
+**Project:** Tweet Audit
+**Author:** Ridwan
+**Date:** January 2025
+
+This doc explains the key technical decisions I made building this tweet audit tool, and more importantly, *why* I made them. Some decisions were obvious, others took production debugging to get right.
 
 ---
 
 ## 1. Processing Architecture
 
-**Decision:** Batch Processing  
-**Alternatives Considered:** Long-running streaming service with @Scheduled
+I went with **batch processing** (you run it manually when you need it) instead of a long-running streaming service.
 
 ### Comparison
 
@@ -23,24 +23,19 @@
 | User Control | Explicit | Implicit |
 | Debugging | Easier | More complex |
 
-### Rationale
+### Why batch?
 
-Batch processing chosen for:
-- Alignment with learning objectives (focus on core patterns, not infrastructure)
-- Simpler implementation matches project scope
-- User has control over processing timing
-- Similar pattern proven successful in Python thesis project
-- No need for 24/7 server infrastructure
-- Natural fit for one-time archive analysis
+This is a learning project, and I wanted to focus on core Java/Spring patterns rather than infrastructure management. Batch processing also makes sense for the use case — analyzing Twitter archives is typically a one-time or occasional task, not something that needs 24/7 monitoring.
 
-Streaming appropriate for: Multi-user SaaS, real-time monitoring, enterprise environments with existing infrastructure.
+I used a similar pattern in my Python thesis project (LLM classification with Ollama), and it worked well. The user has explicit control over when processing happens, which makes debugging easier and avoids the complexity of managing a server.
+
+A streaming service would be the right call for multi-user SaaS platforms, real-time monitoring, or enterprise environments with existing infrastructure.
 
 ---
 
 ## 2. Rate Limiting Strategy
 
-**Decision:** Thread.sleep() with manual quota tracking  
-**Alternatives Considered:** Guava RateLimiter, Spring @Scheduled + Semaphore
+I'm using **Thread.sleep()** with manual quota tracking instead of fancy rate limiter libraries.
 
 ### Comparison
 
@@ -50,40 +45,40 @@ Streaming appropriate for: Multi-user SaaS, real-time monitoring, enterprise env
 | Guava RateLimiter | Yes | No | Medium | Guava |
 | @Scheduled + Semaphore | Yes | Manual | High | Spring Context |
 
-### Rationale
+### Why Thread.sleep()?
 
-**Key insight:** Gemini has two rate limits:
-- 10 RPM (requests per minute) - easy to handle with simple wait
-- 250 RPD (requests per day) - requires persistent state tracking regardless of rate limiter
+Here's the thing: Gemini has *two* rate limits:
+- **10 RPM** (requests per minute) — easy to handle
+- **250 RPD** (requests per day) — the hard part
 
-Thread.sleep() chosen because:
-- Solves the actual problem (10 RPM = wait 6 seconds between requests)
+The RPM limit is straightforward: wait 6 seconds between requests and you're good. Thread.sleep() solves this perfectly.
+
+The RPD limit is where it gets interesting. No rate limiter library handles daily quotas that reset at a specific timezone (midnight Pacific Time). That requires persistent state tracking no matter what approach you use.
+
+So I went with Thread.sleep() because:
+- It solves the actual constraint (10 RPM)
 - Zero dependencies
-- Explicit and understandable
-- All approaches require manual RPD tracking via CSV anyway
-- Guava RateLimiter doesn't solve daily quota problem
-- @Scheduled adds unnecessary complexity for batch architecture
+- The code is explicit and easy to understand
+- All the fancier approaches still need manual daily quota tracking anyway
 
-**Critical distinction:** None of the rate limiters address the hard problem (250 RPD with timezone-aware reset). That requires CSV state tracking in all cases.
+Adding Guava RateLimiter or Spring @Scheduled would add complexity without solving the hard problem.
 
 ---
 
 ## 2.1. Dynamic (Adaptive) Rate Limiting
 
-**Decision:** Adaptive delay adjustment based on API response behavior
-**Alternatives Considered:** Fixed delays, exponential backoff only
+The rate limiter adjusts delays based on how the API is actually behaving, rather than using fixed delays.
 
 ### Strategy
 
-**Adaptive behavior:**
-- **Fast responses (< 500ms):** Reduce delay by 100ms (speed up gradually)
-- **Normal responses (500-3000ms):** Maintain current delay
-- **Slow responses (> 3000ms):** Increase delay by 500ms (be more respectful)
+Here's how it adapts:
+- **Fast responses (< 500ms):** Reduce delay by 100ms (gradually speed up)
+- **Normal responses (500-3000ms):** Keep current delay
+- **Slow responses (> 3000ms):** Increase delay by 500ms (give the API breathing room)
 - **Rate limit hit (429):** Double delay (aggressive backoff)
 - **Server error (5xx):** Increase delay by 500ms (moderate backoff)
 
-**Delay bounds:** 200ms (minimum) to 10s (maximum)
-**Initial delay:** 1000ms (conservative start)
+Delays stay between 200ms (minimum) and 10s (maximum), starting at 1000ms.
 
 ### Comparison
 
@@ -93,28 +88,27 @@ Thread.sleep() chosen because:
 | Fixed Delays | No | No | Very Low | Low |
 | Exponential Backoff Only | Partial | Yes | Very Low | Medium |
 
-### Rationale
+### Why adaptive?
 
-Adaptive rate limiting chosen for:
-- **Automatic optimization:** Speeds up when API is fast, slows down when API is stressed
-- **Respectful behavior:** Backs off on rate limits/errors without manual intervention
+Fixed delays waste time when the API is responding quickly. Exponential backoff only increases delays, never speeds up.
+
+With adaptive rate limiting, the code automatically finds the sweet spot — processing as fast as possible without overwhelming the API. If Gemini starts responding slowly, we back off. If it's consistently fast, we speed up.
 
 ---
 
 ## 2.2. Daily Quota Tracking
 
-**Decision:** Persistent JSON-based quota tracking with Pacific Time zone awareness
-**Alternatives Considered:** In-memory tracking, database-based tracking, no tracking
+I track daily quota usage in a persistent JSON file that's timezone-aware (Pacific Time).
 
-### Strategy
+### How it works
 
-**Implementation:**
-- **Persistent storage:** JSON file (`results/daily_quota.json`) survives app restarts
-- **Timezone awareness:** Tracks quota based on Pacific Time (Gemini's quota reset schedule)
-- **Automatic reset:** Detects new day and resets counter at midnight PST
-- **Pre-flight checks:** Validates remaining quota before processing starts
-- **Warning system:** Logs warnings at 92% usage (230/250 requests)
-- **Graceful stopping:** Prevents hitting 250 RPD limit unexpectedly
+The system:
+- Saves quota state to `results/daily_quota.json` (survives app restarts)
+- Tracks quota based on Pacific Time (Gemini resets at midnight PST)
+- Automatically detects new days and resets the counter
+- Checks remaining quota before processing starts
+- Warns at 92% usage (230/250 requests)
+- Stops gracefully before hitting the hard limit
 
 **Quota file format:**
 ```json
@@ -133,24 +127,19 @@ Adaptive rate limiting chosen for:
 | Database Tracking | Yes | Yes | High | JDBC/JPA |
 | No Tracking | N/A | N/A | None | None |
 
-### Rationale
+### Why track daily quota?
 
-Daily quota tracking chosen for:
-- **Prevents wasted time:** Avoids processing 100 tweets, hitting quota at tweet #50, failing rest
-- **Better UX:** Clear messaging about quota status and reset time
-- **Production-ready:** Handles multi-day processing jobs and restarts
-- **Simple implementation:** Leverages existing Jackson dependency
-- **Timezone correctness:** Gemini resets quota at midnight PST, not user's local time
+Without tracking, you might process 100 tweets, hit quota at tweet #50, and watch the rest fail. That's frustrating.
 
-**Why not simpler alternatives:**
-- **In-memory:** Loses state on restart, can't resume multi-day jobs
-- **Database:** Overkill for single-user batch tool, adds complexity
-- **No tracking:** Users hit quota unexpectedly, poor experience
+The 250 requests per day limit is the real constraint for large archives. Processing 250 tweets takes about 4 hours with batch delays, so multi-day jobs are common. Quota tracking isn't optional — it's essential.
 
-**Key insight:** Gemini's 250 RPD limit is the hard constraint (not 15 RPM). For large archives:
-- 250 tweets takes ~4 hours (with batch delays)
-- Multi-day processing is common
-- Quota tracking is essential, not optional
+I chose JSON because:
+- It persists across restarts (unlike in-memory)
+- Simple implementation using Jackson (already in the project)
+- Timezone-aware (matches Gemini's midnight PST reset)
+- Human-readable for debugging
+
+A database would be overkill for a single-user batch tool.
 
 **Example output:**
 ```
@@ -160,39 +149,12 @@ Daily quota tracking chosen for:
   Remaining: 105 requests
   Resets: midnight PST (in 8 hours)
 ```
-- **Better throughput:** Can process faster than fixed 6-second delays when API is responsive
-- **Simplicity:** Single component with clear responsibilities
-- **Testability:** Easy to unit test different scenarios
-
-**How it works in practice:**
-1. Start conservative (1000ms delay)
-2. If API responds quickly repeatedly → gradually reduce to 200ms minimum
-3. If API slows down or errors → increase delay to reduce load
-4. If rate limited → aggressively back off (double delay)
-
-**Why not fixed delays:**
-- Wastes time when API is fast (fixed 6s delay might be too conservative)
-- Doesn't adapt to API stress (keeps hammering even when API is slow)
-
-**Why not exponential backoff only:**
-- Only increases delays, never speeds up
-- Doesn't distinguish between fast/normal/slow responses
-- Misses optimization opportunities
-
-### Implementation
-
-See: `AdaptiveRateLimiter.java` with 12 comprehensive unit tests covering:
-- Speed up/slow down scenarios
-- Boundary conditions (min/max delays)
-- Rate limit and server error handling
-- Multi-scenario adaptation
 
 ---
 
 ## 2.3. Graceful Shutdown on Quota Exhaustion
 
-**Decision:** Protected method extraction for shutdown behavior
-**Alternatives Considered:** Direct System.exit(), environment checks, dependency injection
+When quota is exhausted, the app shuts down gracefully using a protected method that can be mocked in tests.
 
 ### Comparison
 
@@ -203,35 +165,29 @@ See: `AdaptiveRateLimiter.java` with 12 comprehensive unit tests covering:
 | **Protected method (Chosen)** | **Yes** | **Low** | **Medium** |
 | DI with ShutdownHandler | Yes | Medium | High |
 
-### Rationale
+### Why a protected method?
 
-Protected method chosen for:
-- **Testability:** Mockito spy overrides method without terminating tests
-- **Simplicity:** Single method, no interfaces or additional classes
-- **Sufficient:** YAGNI - single use case doesn't justify DI abstraction
-- **Evolution path:** Easy to refactor to DI if multiple shutdown scenarios emerge
+I needed the shutdown to be testable. Calling `System.exit()` directly would kill the test suite, so I extracted it into a protected method that Mockito can spy on and override.
 
-**Key insight:** `SpringApplication.exit()` triggers cleanup but doesn't terminate JVM. Need both `SpringApplication.exit()` (cleanup) + `System.exit()` (termination).
+This is simple (just one method, no interfaces) and sufficient for the current use case. If I needed multiple shutdown scenarios later, I could refactor to dependency injection, but YAGNI applies here.
 
-**Why not alternatives:**
-- Direct System.exit(): Untestable
-- Environment checks: Hidden dependencies, brittle
-- DI: Over-engineering for single use case
+One tricky bit I discovered: `SpringApplication.exit()` triggers Spring's cleanup (close connections, flush logs, etc.) but doesn't actually terminate the JVM. You need both `SpringApplication.exit()` (cleanup) and `System.exit()` (termination).
 
 ---
 
 ## 2.4. Quota Safety Threshold
 
-**Decision:** Configurable safety threshold at 95% of daily limit (950/1000 requests)
-**Alternatives Considered:** Full quota utilization (1000), 99% threshold (990), 90% threshold (900)
+I stop processing at 95% of the daily limit (950/1000 requests) instead of pushing to the full 1000.
 
-### Problem Statement
+### The problem I ran into
 
-Production testing revealed quota tracking mismatch:
-- Client tracker: 997/1000 requests (3 remaining)
-- Gemini API response: 429 Rate Limit Exceeded
+During production testing, I hit an interesting issue:
+- My client-side tracker: 997/1000 requests (3 remaining)
+- Gemini's response: **429 Rate Limit Exceeded**
 
-Root causes: Clock drift between client/server, race conditions in quota increment timing, retry logic discrepancies, and distributed system timing issues.
+Wait, what? According to my tracking, I had 3 requests left. But Gemini disagreed.
+
+Turns out, there are timing issues in distributed systems: clock drift between my machine and Gemini's servers, race conditions in quota increment timing, retry logic discrepancies, etc. My tracker and Gemini's tracker weren't perfectly in sync.
 
 ### Approach Comparison
 
@@ -242,28 +198,25 @@ Root causes: Clock drift between client/server, race conditions in quota increme
 | **950 (95%)** | **50 requests** | **5%** | **Low** |
 | 900 (90%) | 100 requests | 10% | Very Low |
 
-### Industry Standards
+### Why 95%?
 
-Major API providers recommend 5-10% safety margins:
+I looked at what major API providers recommend and they all use 5-10% safety margins:
 - **AWS Lambda**: 90% threshold (900/1000 concurrent executions)
-- **Stripe API**: 80-90% throttling (80-90 req/sec of 100 limit)
+- **Stripe API**: 80-90% throttling
 - **GitHub API**: 90% threshold (4500/5000 req/hour)
 - **Google Cloud**: Monitor at 80-90%, alert at 95%
 
-Common pattern: Warn at 80-90%, hard stop at 95%.
+The common pattern is: warn at 80-90%, hard stop at 95%.
 
-**Decision factors:**
-- Observed 3-request gap in production; 50-request buffer provides 16.6x margin
-- Matches Google Cloud's recommended alert threshold
-- Configurable via `quota.safety-threshold` property
-- 5% quota waste prevents cascading failures
+So I went with 95% (950 requests). This gives me a 50-request buffer — way more than the 3-request gap I observed, providing a 16.6x safety margin. It wastes 5% of quota, but prevents hitting unexpected 429 errors.
+
+The threshold is configurable via `quota.safety-threshold` if I need to adjust it later.
 
 ---
 
 ## 3. State Management & Checkpointing
 
-**Decision:** JSON checkpoint + CSV output
-**Alternatives Considered:** Single CSV for both, database
+I use two separate files: a JSON checkpoint for runtime state and a CSV for final output.
 
 ### Structure
 
@@ -296,35 +249,28 @@ tweetUrl,tweetId,status,matchedCriteria,reason
 | Portability | Maximum | High | Low |
 | Complexity | Low | Lowest | High |
 
-### Rationale
+### Why separate files?
 
-JSON checkpoint + CSV output chosen for:
-- **Separation of concerns**: Checkpoint = runtime state, CSV = final output
-- **Fast resume**: Set-based lookup O(1) vs CSV scan O(n)
-- **Clean output**: CSV only contains flagged tweets + errors (user-facing)
-- **Zero dependencies**: No database setup required
-- **Manual cleanup strategy**: User controls when to start fresh (delete checkpoint)
-- **Crash safety**: Checkpoint saved after each batch (max loss: 1 batch)
-- **Human inspectable**: Both files are text-based and readable
+The checkpoint and output serve different purposes:
+- **Checkpoint** = runtime state (which tweets have been processed)
+- **CSV** = final output (which tweets were flagged or errored)
 
-**Why not single CSV?**
-- Would need to store ALL tweets (flagged + clean) to track processed IDs
-- Resume requires scanning entire file to find processed IDs
-- Mixes runtime state with final output
-- CSV doesn't support Sets (would need pipe-separated string)
+Using a single CSV would mean storing ALL tweets (flagged + clean) just to track what's been processed. That mixes runtime state with final output, and resuming would require scanning the entire CSV file to find processed IDs.
 
-**Why not database?**
-- Overkill for single-user CLI tool
-- Adds deployment complexity
-- Not portable (can't easily share/inspect)
-- Learning project focuses on Java/Spring, not DB management
+With separate files:
+- Resume is fast (O(1) Set lookup instead of O(n) file scan)
+- CSV only contains flagged tweets and errors (clean, user-facing)
+- Both files are text-based and human-readable
+- Zero dependencies (no database setup)
+- Checkpoint is saved after each batch (max loss: 1 batch if app crashes)
+
+A database would be overkill for a single-user CLI tool, and this is a learning project focused on Java/Spring patterns, not database management.
 
 ---
 
 ## 3.1. Incremental CSV Writing
 
-**Decision:** Write flagged tweets to CSV after each batch, clear results list between batches
-**Alternatives Considered:** Write all results at end only, write after every tweet
+I write flagged tweets to the CSV after each batch and clear the results list between batches.
 
 ### Comparison
 
@@ -334,39 +280,34 @@ JSON checkpoint + CSV output chosen for:
 | Final write only | None | High | Minimal | Entire run |
 | Per-tweet | Maximum | Minimal | High | 1 tweet |
 
-### Rationale
+### Why per-batch?
 
-Incremental batch writing chosen for:
-- **Crash resilience:** CSV contains all flagged tweets up to last completed batch
-- **Quota exhaustion safety:** When daily quota runs out mid-processing, all previous results preserved
-- **Memory efficiency:** Clear results list after each batch write (avoid accumulation)
-- **Aligns with checkpointing:** Both checkpoint and CSV written together per batch
+If the app crashes or quota runs out mid-processing, incremental writing means all the work up to the last completed batch is saved. Without this, you'd lose everything.
 
-### Critical Implementation Detail
+This also keeps memory usage low — I clear the results list after each batch write to avoid accumulation.
 
-**Must clear results list after writing:**
+### A critical bug I fixed
+
+Initially, I forgot to clear the results list after writing. This caused exponential duplicates:
+- Batch 1: Writes 15 tweets (15 total)
+- Batch 2: Writes 30 tweets (batch 1 + batch 2 = 15 duplicates!)
+- Batch 3: Writes 45 tweets (batch 1+2+3 = 30 duplicates!)
+
+The fix is simple but essential:
 ```java
 csvWriter.appendResults(results);  // Write batch to CSV
 results.clear();                   // Clear to prevent accumulation
 ```
 
-**Without clearing:** Results accumulate across batches causing exponential duplicates:
-- Batch 1: Writes 15 tweets (15 total)
-- Batch 2: Writes 30 tweets (batch 1 + batch 2 = 15 duplicates)
-- Batch 3: Writes 45 tweets (batch 1+2+3 = 30 duplicates)
+Now each tweet is written exactly once.
 
-**With clearing:** Each tweet written exactly once to CSV.
-
-**Why not alternatives:**
-- Final write only: Lose all data on crash or quota exhaustion
-- Per-tweet: 10x more I/O operations, adds complexity to processing loop
+Writing at the end only would lose all data on crashes. Writing per-tweet would be 10x more I/O operations with minimal benefit.
 
 ---
 
 ## 4. Concurrency Model
 
-**Decision:** Sequential processing  
-**Alternatives Considered:** Batched parallel (N=10), Fully async
+I process tweets sequentially (one at a time) instead of using parallelism or async processing.
 
 ### Comparison
 
@@ -378,28 +319,25 @@ results.clear();                   // Clear to prevent accumulation
 
 *Limited by API rate limit, not concurrency model
 
-### Rationale
+### Why sequential?
 
-**Critical constraint:** API limits 10 requests per minute (RPM), not concurrent connections.
+Here's the key insight: Gemini's API limits are 10 requests per minute, not concurrent connections.
 
-Sequential processing chosen because:
-- Only approach that respects "10 requests per minute" without bursting
-- Parallel execution would send 10 requests instantly, violating rate limit
-- All approaches achieve same throughput (limited by API, not code)
-- Simplest implementation with lowest risk
-- Deterministic behavior aids debugging
-- No risk of overwhelming API or triggering bans
+If I used parallel processing, I'd send 10 requests instantly and immediately violate the rate limit. All three approaches achieve the same throughput anyway — the bottleneck is the API, not the code.
 
-**Key insight:** When external API has strict rate limits, concurrency provides no benefit and adds significant risk.
+Sequential processing is:
+- The only approach that respects "10 requests per minute" without bursting
+- The simplest implementation with the lowest risk
+- Deterministic, which makes debugging easier
+- Safe from overwhelming the API or triggering bans
 
-Parallel appropriate for: Internal APIs, no rate limits, operations where latency compounds.
+Parallelism would be appropriate for internal APIs with no rate limits, or operations where latency compounds. But when an external API has strict rate limits, concurrency provides no benefit and adds significant risk.
 
 ---
 
 ## 5. Checkpoint Frequency
 
-**Decision:** Save after every batch (10 tweets)
-**Alternatives Considered:** After every tweet, manual checkpoints only
+I save the checkpoint after every batch (10 tweets), not after every tweet.
 
 ### Comparison
 
@@ -409,41 +347,20 @@ Parallel appropriate for: Internal APIs, no rate limits, operations where latenc
 | Every Tweet | 1 tweet | ~1 request | ~1ms per tweet | 0.3% |
 | Manual Only | All progress | Unlimited | 0 | 0% |
 
-### Performance Analysis
+### Why per-batch?
 
-**Current implementation:**
+The math is compelling:
 - JSON write: ~1ms
 - Gemini API call: ~2,000ms per tweet
 - Batch size: 10 tweets
 - Total batch time: ~20,000ms (20 seconds)
 - Checkpoint overhead: 1ms / 20,000ms = 0.0005%
 
-**Actual timing:**
-```
-Batch 1 (10 tweets): 20 seconds processing + 1ms save = 20.001s
-Batch 2 (10 tweets): 20 seconds processing + 1ms save = 20.001s
-Total for 100 tweets: ~200 seconds (checkpoint adds ~0.1s)
-```
+For 100 tweets, checkpointing adds about 0.1 seconds to a ~200-second run. That's negligible.
 
-### Rationale
+I'm already pausing 60 seconds between batches for rate limiting, so saving during that pause is a natural checkpoint point. The code is simpler this way — no need to save inside the tweet processing loop.
 
-Batch checkpointing chosen for:
-- **Aligns with rate limiting**: Already pausing 60s between batches
-- **Negligible overhead**: 1ms checkpoint vs 20s batch processing
-- **Acceptable risk**: Max loss is 10 tweets (100 API requests = $0 on free tier)
-- **Natural checkpoint points**: Save during rate limit pause
-- **Simpler code**: No need to save inside tweet processing loop
-
-**Why not every tweet?**
-- 10x more disk writes (100 vs 10 for 100 tweets)
-- Adds complexity to inner loop
-- API call time (2s) dominates anyway
-- Risk difference minimal (1 vs 10 tweets lost)
-
-**Why not manual only?**
-- Defeats the purpose of checkpointing
-- Any crash loses ALL progress
-- Unacceptable for large archives (1000+ tweets = hours of work)
+The max risk is losing 10 tweets if the app crashes mid-batch, which is acceptable on the free tier ($0 cost).
 
 **Crash scenarios:**
 ```
@@ -458,20 +375,20 @@ Scenario 2: Crash during rate limit pause
   - Recovery: Resume from next batch immediately
 ```
 
+Saving every tweet would be 10x more disk writes with minimal benefit (API call time dominates anyway). Manual checkpoints only would defeat the purpose — any crash would lose ALL progress.
+
 ---
 
 ## 6. Checkpoint Cleanup Strategy
 
-**Decision:** Manual cleanup (user decides)
-**Alternatives Considered:** Auto-delete on success, auto-delete on failure, never delete
+The checkpoint is automatically deleted on successful completion, but preserved on crashes.
 
 ### Comparison
 
 | Strategy | User Control | Crash Recovery | Re-run Behavior | Disk Usage |
 |----------|--------------|----------------|-----------------|------------|
-| Manual (Chosen) | Full control | Resume or fresh | User chooses | Requires cleanup |
-| Auto-delete on success | Limited | Resume | Always fresh | Auto-managed |
-| Auto-delete on failure | None | No resume | Always fresh | Auto-managed |
+| Auto-delete on success (Chosen) | Full control on crash | Resume | Always fresh after success | Auto-managed |
+| Auto-delete always | None | No resume | Always fresh | Auto-managed |
 | Never delete | Full | Always resume | Must delete manually | Grows unbounded |
 
 ### Implementation
@@ -486,42 +403,19 @@ log.info("Checkpoint deleted (processing complete)");
 - Checkpoint file remains
 - User decides: Resume (run again) or Start fresh (delete checkpoint manually)
 
-### Rationale
+### Why auto-delete on success?
 
-Manual cleanup chosen for:
-- **User flexibility**: User controls when to resume vs start fresh
-- **Debugging capability**: Can inspect checkpoint after completion
-- **Safe default**: Preserves state on crash (enables resume)
-- **Explicit behavior**: User knows what will happen (resume or fresh)
-
-**Deletion on success prevents:**
-- Accidentally resuming from old state
+When processing completes successfully, I delete the checkpoint automatically. This prevents:
+- Accidentally resuming from old state on the next run
 - Stale checkpoints from previous runs
-- User confusion ("Why is it resuming?")
+- User confusion ("Why is it resuming when I already processed everything?")
 
-**Preserving on failure enables:**
+But if the app crashes or hits quota mid-run, the checkpoint is preserved so you can:
 - Resume after fixing issues (API key, network, etc.)
 - Inspect progress ("How far did I get?")
-- Manual retry decisions ("Start fresh or continue?")
+- Make manual retry decisions ("Start fresh or continue?")
 
-**Alternative approaches rejected:**
-
-**Auto-delete on success only:** (Also considered, very close)
-- Pro: Clean slate for next run
-- Pro: No stale checkpoints
-- Con: Can't inspect final state
-- **Verdict:** Acceptable alternative, chosen for simplicity
-
-**Auto-delete on failure:**
-- Con: Loses all progress on crash
-- Con: Forces starting over
-- **Verdict:** Defeats purpose of checkpointing
-
-**Never delete:**
-- Con: Stale checkpoints cause confusion
-- Con: Requires manual cleanup every time
-- Con: First run after completion would resume (wrong!)
-- **Verdict:** Poor user experience
+This gives the user full control on crashes while providing a clean slate after successful runs.
 
 ### User Experience
 
@@ -553,8 +447,7 @@ $ mvn spring-boot:run
 
 ## 7. Error Recovery
 
-**Decision:** Spring @Retryable with exponential backoff  
-**Alternatives Considered:** Manual retry loops, fail-fast
+I use Spring's @Retryable with exponential backoff for transient failures, plus checkpoint-based error marking for persistent issues.
 
 ### Configuration
 
@@ -573,24 +466,17 @@ $ mvn spring-boot:run
 | Manual Retry | Good | Imperative | Requires code changes | Complex |
 | Fail-Fast | None | Simple | N/A | Trivial |
 
-### Rationale
+### Why @Retryable?
 
-@Retryable chosen for:
-- Industry-standard pattern for external API calls
-- Handles transient failures (network issues, temporary outages)
-- Exponential backoff reduces load on struggling services
-- Jitter prevents thundering herd on simultaneous failures
-- Declarative approach separates retry logic from business logic
-- Exception-specific retry (only retry appropriate errors)
-- Graceful degradation via @Recover method
+@Retryable is the industry-standard pattern for external API calls. It handles transient failures (network hiccups, temporary outages) with exponential backoff and jitter to avoid overwhelming the service.
 
-**Error classification:**
-- Retryable: Network timeouts, 5xx server errors, 429 rate limits (transient)
-- Non-retryable: 400 Bad Request, 401 Unauthorized, 404 Not Found (permanent)
+The declarative approach keeps retry logic separate from business logic, and it only retries appropriate errors:
+- **Retryable:** Network timeouts, 5xx server errors, 429 rate limits (transient)
+- **Non-retryable:** 400 Bad Request, 401 Unauthorized, 404 Not Found (permanent)
 
-### Two-Tier Error Handling Strategy
+### Two-tier error handling
 
-**Critical distinction:** @Retryable and checkpoint error marking work at **different time scales**.
+Here's where it gets interesting: @Retryable and checkpoint error marking work at **different time scales**.
 
 **@Retryable (seconds):** Automatic recovery from transient issues
 - Network hiccup → Retry after 1s → Success
@@ -602,15 +488,13 @@ $ mvn spring-boot:run
 - Malformed data → All 3 retries fail → Mark as ERROR → User inspects tweet
 - Prevents infinite retry loops on permanently failing tweets
 
-**Why mark failed tweets as "processed":**
+After @Retryable exhausts all attempts, I mark the tweet as processed:
 ```java
-// After @Retryable exhausts all attempts:
 processedTweetIds.add(tweet.getIdStr());  // Don't retry this tweet automatically
 errorCount++;
 ```
 
-Without this: Same failing tweet retried on every run → infinite loop
-With this: User controls retry via checkpoint deletion (manual decision)
+Without this, the same failing tweet would be retried on every run (infinite loop). With this, the user controls retry via checkpoint deletion (manual decision).
 
 **Recovery flow:**
 1. @Retryable tries 3 times (automatic, seconds)
@@ -618,20 +502,15 @@ With this: User controls retry via checkpoint deletion (manual decision)
 3. Continue processing (don't get stuck)
 4. User sees ERROR in CSV → Fixes root cause → Deletes checkpoint → Retries manually
 
-Manual retry appropriate for: Non-Spring projects, custom retry logic requirements.
-
 ---
 
 ## 8. Timezone Handling
 
-**Decision:** Use Pacific Time (America/Los_Angeles)  
-**Alternative Considered:** Local time (Berlin)
+I track quota based on Pacific Time (America/Los_Angeles), not my local time (Berlin).
 
 ### The Problem
 
-- Gemini quota resets: Midnight Pacific Time
-- Development location: Berlin, Germany (PT + 8/9 hours)
-- Mismatch causes quota window desynchronization
+Gemini's quota resets at midnight Pacific Time, but I'm developing in Berlin, Germany (PT + 8/9 hours). If I used local time, my quota tracker and Gemini's quota tracker would be desynchronized.
 
 ### Scenario Comparison
 
@@ -642,13 +521,13 @@ Code checks: quota for Jan 14
 Gemini enforces: quota for Jan 14
 Result: Synchronized ✓
 
-9:00 AM Berlin = 12:00 AM PT (Jan 15) 
+9:00 AM Berlin = 12:00 AM PT (Jan 15)
 Code checks: quota for Jan 15 (reset)
 Gemini enforces: quota for Jan 15 (reset)
 Result: Synchronized ✓
 ```
 
-**Local Time:**
+**Local Time (Berlin):**
 ```
 8:50 AM Berlin = 11:50 PM PT
 Code thinks: Jan 15 (local date)
@@ -661,57 +540,54 @@ Gemini thinks: Now Jan 15 (new quota available)
 Result: Misses quota reset window
 ```
 
-### Rationale
+### Why Pacific Time?
 
-Pacific Time chosen for:
-- Matches Gemini's authoritative quota reset schedule
-- Works regardless of development/deployment location
-- Automatic DST handling via Java ZoneId
-- Prevents entire class of timezone-related bugs
-- No manual reset logic needed
+Using Pacific Time means my quota tracking matches Gemini's authoritative reset schedule, regardless of where I'm developing or deploying. Java's `ZoneId` handles DST automatically, which prevents an entire class of timezone-related bugs.
 
-**Core principle:** In distributed systems, always use the authoritative service's timezone for quota/rate limit tracking.
+Core principle: In distributed systems, always use the authoritative service's timezone for quota/rate limit tracking.
 
 ---
 
 ## Summary
 
-| Decision | Chosen Approach | Primary Rationale |
-|----------|----------------|-------------------|
+| Decision | Chosen Approach | Why |
+|----------|----------------|-----|
 | Architecture | Batch processing | Simplicity, learning focus, proven pattern |
-| Rate Limiting | Thread.sleep() | Solves actual constraint, zero dependencies |
-| **Adaptive Rate Limiting** | **Response-based delay adjustment** | **Optimizes throughput, respectful behavior** |
-| **Daily Quota Tracking** | **Persistent JSON (Pacific Time)** | **Prevents quota exhaustion, timezone-correct** |
-| **Quota Safety Threshold** | **Configurable 95% threshold (950/1000)** | **Prevents 429 errors from clock drift/race conditions** |
-| **Graceful Shutdown** | **Protected method extraction** | **Testable, simple, avoids over-engineering** |
+| Rate Limiting | Thread.sleep() | Solves the actual constraint, zero dependencies |
+| Adaptive Rate Limiting | Response-based delay adjustment | Optimizes throughput, respectful API behavior |
+| Daily Quota Tracking | Persistent JSON (Pacific Time) | Prevents quota exhaustion, timezone-correct |
+| Quota Safety Threshold | Configurable 95% threshold (950/1000) | Prevents 429s from clock drift/race conditions |
+| Graceful Shutdown | Protected method extraction | Testable, simple, avoids over-engineering |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
-| Concurrency | Sequential | Only valid approach for rate-limited API |
+| Concurrency | Sequential | Only valid approach for rate-limited APIs |
 | Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
-| Checkpoint Cleanup | Auto-delete on success | Clean slate for next run, enables manual resume |
+| Checkpoint Cleanup | Auto-delete on success | Clean slate for next run, manual resume on crash |
 | Error Recovery | @Retryable | Industry standard, handles transient failures |
-| Timezone | Pacific Time | Aligns with authoritative quota source |
+| Timezone | Pacific Time | Matches Gemini's authoritative quota source |
 
 ---
 
 ## Key Learnings
 
-1. **Architecture determines tooling** - Processing model (batch vs streaming) dictates rate limiting approach
-2. **Rate limits are multi-dimensional** - RPM (easy) vs RPD (requires state management)
-3. **Simplicity scales** - Thread.sleep() sufficient when concurrent execution provides no benefit
-4. **State management drives design** - Separate checkpoint (resume) from output (results) for clarity
-5. **Natural checkpoint points exist** - Rate limit pauses are ideal times to save state
-6. **Crash safety is cheap** - JSON write (1ms) vs API call (2000ms) = negligible overhead
-7. **User flexibility matters** - Manual cleanup strategy provides control over resume vs fresh start
-8. **Set-based lookups scale** - O(1) contains() vs O(n) CSV scan for resume performance
-9. **Adaptive rate limiting optimizes throughput** - Response-time-based adjustments (200ms-10s) respect API health while maximizing speed when possible
-10. **Good citizen pattern** - Fast responses → speed up, slow/errors → back off creates respectful API client behavior
-11. **Daily quotas require persistence** - 250 RPD limit spans days, in-memory tracking fails across restarts
-12. **Timezone matters for quotas** - Always track using API provider's timezone (Pacific Time for Gemini) to avoid off-by-one-day errors
-13. **SpringApplication.exit() ≠ System.exit()** - Spring cleanup method returns exit code but doesn't terminate JVM; need both for graceful shutdown
-14. **YAGNI prevents over-engineering** - Protected method sufficient; don't create interfaces/strategies until multiple use cases emerge
-15. **Testability doesn't require dependency injection** - Mockito spy can override protected methods for testing without additional abstractions
-16. **Client-side quota tracking requires safety margins** - Distributed system timing issues (clock drift, race conditions) mean 1000/1000 fails; industry standard is 90-95% threshold
-17. **Production testing validates architecture decisions** - Observed 997/1000 → 429 error proves need for safety buffer; real-world feedback > theoretical design
+Things I learned building this:
+
+1. **Architecture determines tooling** — Choosing batch vs streaming dictates your rate limiting approach
+2. **Rate limits are multi-dimensional** — RPM is easy (Thread.sleep()), RPD requires persistent state tracking
+3. **Simplicity scales** — Thread.sleep() is sufficient when concurrency provides no benefit
+4. **Separate concerns in state management** — Checkpoint (resume state) vs CSV (final output) keeps things clean
+5. **Natural checkpoint points exist** — Rate limit pauses are ideal times to save state
+6. **Crash safety is cheap** — JSON write (1ms) vs API call (2000ms) = negligible overhead
+7. **Set-based lookups scale** — O(1) contains() vs O(n) CSV scan makes resume fast
+8. **Adaptive rate limiting optimizes throughput** — Response-time adjustments (200ms-10s) respect API health while maximizing speed
+9. **Good citizen pattern** — Fast responses → speed up, slow/errors → back off
+10. **Daily quotas require persistence** — 250 RPD limit spans days; in-memory tracking fails across restarts
+11. **Timezone matters for quotas** — Always use API provider's timezone (Pacific Time for Gemini) to avoid off-by-one-day errors
+12. **SpringApplication.exit() ≠ System.exit()** — Spring's cleanup method doesn't terminate the JVM; need both for graceful shutdown
+13. **YAGNI prevents over-engineering** — Protected method sufficient; don't create interfaces until multiple use cases emerge
+14. **Testability doesn't require DI** — Mockito spy can override protected methods without additional abstractions
+15. **Client-side quota tracking requires safety margins** — Distributed system timing issues mean 1000/1000 fails; industry uses 90-95% thresholds
+16. **Production testing validates decisions** — Observed 997/1000 → 429 error proved I needed a safety buffer; real-world feedback beats theoretical design
+17. **Clear results lists between batches** — Forgot this once and got exponential duplicates in the CSV
 
 ---
 
