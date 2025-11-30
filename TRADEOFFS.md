@@ -48,15 +48,15 @@ I'm using **Thread.sleep()** with manual quota tracking instead of fancy rate li
 ### Why Thread.sleep()?
 
 Here's the thing: Gemini has *two* rate limits:
-- **10 RPM** (requests per minute) — easy to handle
-- **250 RPD** (requests per day) — the hard part
+- **15 RPM** (requests per minute) — easy to handle
+- **1000 RPD** (requests per day) — the hard part
 
 The RPM limit is straightforward: wait 6 seconds between requests and you're good. Thread.sleep() solves this perfectly.
 
 The RPD limit is where it gets interesting. No rate limiter library handles daily quotas that reset at a specific timezone (midnight Pacific Time). That requires persistent state tracking no matter what approach you use.
 
 So I went with Thread.sleep() because:
-- It solves the actual constraint (10 RPM)
+- It solves the actual constraint (15 RPM)
 - Zero dependencies
 - The code is explicit and easy to understand
 - All the fancier approaches still need manual daily quota tracking anyway
@@ -107,7 +107,7 @@ The system:
 - Tracks quota based on Pacific Time (Gemini resets at midnight PST)
 - Automatically detects new days and resets the counter
 - Checks remaining quota before processing starts
-- Warns at 92% usage (230/250 requests)
+- Warns at 90% usage (855/950 requests)
 - Stops gracefully before hitting the hard limit
 
 **Quota file format:**
@@ -131,7 +131,7 @@ The system:
 
 Without tracking, you might process 100 tweets, hit quota at tweet #50, and watch the rest fail. That's frustrating.
 
-The 250 requests per day limit is the real constraint for large archives. Processing 250 tweets takes about 4 hours with batch delays, so multi-day jobs are common. Quota tracking isn't optional — it's essential.
+The 1000 requests per day limit is the real constraint for large archives. Processing 1000 tweets takes about 16 hours with batch delays, so multi-day jobs are common for very large archives. Quota tracking isn't optional — it's essential.
 
 I chose JSON because:
 - It persists across restarts (unlike in-memory)
@@ -145,8 +145,8 @@ A database would be overkill for a single-user batch tool.
 ```
 === Daily Quota Status ===
   Date: 2025-01-26
-  Used: 145/250 requests (58%)
-  Remaining: 105 requests
+  Used: 580/1000 requests (58%)
+  Remaining: 370 requests
   Resets: midnight PST (in 8 hours)
 ```
 
@@ -313,20 +313,20 @@ I process tweets sequentially (one at a time) instead of using parallelism or as
 
 | Model | Throughput | Memory | API Load | Rate Limit Compliance |
 |-------|-----------|--------|----------|----------------------|
-| Sequential (Chosen) | 10/min | Minimal | Smooth | Perfect |
-| Batched (N=10) | 10/min* | Medium | Bursty | Violates instantaneous limit |
-| Fully Async | 10/min* | High | Overwhelming | Complete violation |
+| Sequential (Chosen) | 15/min | Minimal | Smooth | Perfect |
+| Batched (N=15) | 15/min* | Medium | Bursty | Violates instantaneous limit |
+| Fully Async | 15/min* | High | Overwhelming | Complete violation |
 
 *Limited by API rate limit, not concurrency model
 
 ### Why sequential?
 
-Here's the key insight: Gemini's API limits are 10 requests per minute, not concurrent connections.
+Here's the key insight: Gemini's API limits are 15 requests per minute, not concurrent connections.
 
-If I used parallel processing, I'd send 10 requests instantly and immediately violate the rate limit. All three approaches achieve the same throughput anyway — the bottleneck is the API, not the code.
+If I used parallel processing, I'd send 15 requests instantly and immediately violate the rate limit. All three approaches achieve the same throughput anyway — the bottleneck is the API, not the code.
 
 Sequential processing is:
-- The only approach that respects "10 requests per minute" without bursting
+- The only approach that respects "15 requests per minute" without bursting
 - The simplest implementation with the lowest risk
 - Deterministic, which makes debugging easier
 - Safe from overwhelming the API or triggering bans
@@ -569,25 +569,17 @@ Core principle: In distributed systems, always use the authoritative service's t
 
 ## Key Learnings
 
-Things I learned building this:
+Production debugging taught me:
 
-1. **Architecture determines tooling** — Choosing batch vs streaming dictates your rate limiting approach
-2. **Rate limits are multi-dimensional** — RPM is easy (Thread.sleep()), RPD requires persistent state tracking
-3. **Simplicity scales** — Thread.sleep() is sufficient when concurrency provides no benefit
-4. **Separate concerns in state management** — Checkpoint (resume state) vs CSV (final output) keeps things clean
-5. **Natural checkpoint points exist** — Rate limit pauses are ideal times to save state
-6. **Crash safety is cheap** — JSON write (1ms) vs API call (2000ms) = negligible overhead
-7. **Set-based lookups scale** — O(1) contains() vs O(n) CSV scan makes resume fast
-8. **Adaptive rate limiting optimizes throughput** — Response-time adjustments (200ms-10s) respect API health while maximizing speed
-9. **Good citizen pattern** — Fast responses → speed up, slow/errors → back off
-10. **Daily quotas require persistence** — 250 RPD limit spans days; in-memory tracking fails across restarts
-11. **Timezone matters for quotas** — Always use API provider's timezone (Pacific Time for Gemini) to avoid off-by-one-day errors
-12. **SpringApplication.exit() ≠ System.exit()** — Spring's cleanup method doesn't terminate the JVM; need both for graceful shutdown
-13. **YAGNI prevents over-engineering** — Protected method sufficient; don't create interfaces until multiple use cases emerge
-14. **Testability doesn't require DI** — Mockito spy can override protected methods without additional abstractions
-15. **Client-side quota tracking requires safety margins** — Distributed system timing issues mean 1000/1000 fails; industry uses 90-95% thresholds
-16. **Production testing validates decisions** — Observed 997/1000 → 429 error proved I needed a safety buffer; real-world feedback beats theoretical design
-17. **Clear results lists between batches** — Forgot this once and got exponential duplicates in the CSV
+1. **Client-side quota tracking needs safety margins** — Hit 997/1000 → got 429 anyway due to clock drift. Industry standard is 90-95% thresholds, not 100%.
+
+2. **SpringApplication.exit() ≠ System.exit()** — Spring's cleanup method returns an exit code but doesn't actually terminate the JVM. You need both.
+
+3. **Always clear lists after batch writes** — Forgot this once and got exponential CSV duplicates (batch 1: 15 tweets, batch 2: 30 tweets, batch 3: 45 tweets...).
+
+4. **Timezone matters for quota tracking** — Gemini resets at midnight Pacific Time. Using Berlin time would cause off-by-one-day errors.
+
+5. **Rate limits are multi-dimensional** — RPM is easy (Thread.sleep()), but RPD requires persistent state tracking no matter which library you use.
 
 ---
 
