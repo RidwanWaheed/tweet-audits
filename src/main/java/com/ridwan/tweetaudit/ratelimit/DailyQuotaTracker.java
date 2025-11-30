@@ -17,39 +17,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
 
-/**
- * Tracks daily API quota usage for Gemini API.
- *
- * <p>Features:
- *
- * <ul>
- *   <li>Persistent tracking across application restarts
- *   <li>Automatic reset at midnight Pacific Time (Gemini's quota reset schedule)
- *   <li>Pre-flight quota checks before processing
- *   <li>Configurable safety threshold to prevent quota overruns
- *   <li>Graceful stopping before hitting quota
- * </ul>
- *
- * <p>Gemini 2.5 Flash-Lite Free Tier Limits:
- *
- * <ul>
- *   <li>15 Requests Per Minute (RPM) - handled by AdaptiveRateLimiter
- *   <li>1,000 Requests Per Day (RPD) - handled by this tracker
- * </ul>
- *
- * <p>Safety Threshold:
- *
- * <ul>
- *   <li>Configurable via quota.safety-threshold property
- *   <li>Default: 950 (95% of daily limit)
- *   <li>Accounts for clock drift, race conditions, retry logic
- *   <li>50-request buffer provides margin for distributed system timing issues
- * </ul>
- */
 @Component
 @Slf4j
 public class DailyQuotaTracker {
 
+  // Gemini resets daily quotas at midnight Pacific Time
   private static final ZoneId PACIFIC_TIME = ZoneId.of("America/Los_Angeles");
 
   private final ObjectMapper objectMapper;
@@ -74,11 +46,6 @@ public class DailyQuotaTracker {
     this.currentState = loadOrCreateQuotaState();
   }
 
-  /**
-   * Load quota state from file or create new state if file doesn't exist.
-   *
-   * @return Current quota state
-   */
   private QuotaState loadOrCreateQuotaState() {
     try {
       if (Files.exists(quotaFilePath)) {
@@ -98,19 +65,11 @@ public class DailyQuotaTracker {
     }
   }
 
-  /**
-   * Create new quota state for current day.
-   *
-   * @return New quota state
-   */
   private QuotaState createNewQuotaState() {
     String currentDate = getCurrentDateInPacific();
     return new QuotaState(currentDate, 0);
   }
 
-  /**
-   * Save current quota state to file.
-   */
   private void saveQuotaState() {
     try {
       // Ensure results directory exists
@@ -127,18 +86,10 @@ public class DailyQuotaTracker {
     }
   }
 
-  /**
-   * Get current date in Pacific Time (yyyy-MM-dd format).
-   *
-   * @return Current date string
-   */
   private String getCurrentDateInPacific() {
     return ZonedDateTime.now(PACIFIC_TIME).format(DateTimeFormatter.ISO_LOCAL_DATE);
   }
 
-  /**
-   * Reset quota state if it's a new day in Pacific Time.
-   */
   private void resetIfNewDay() {
     String currentDate = getCurrentDateInPacific();
 
@@ -154,18 +105,8 @@ public class DailyQuotaTracker {
     }
   }
 
-  /**
-   * Check if there's remaining quota before making a request.
-   *
-   * <p>Uses safety threshold instead of absolute daily limit to account for:
-   * <ul>
-   *   <li>Clock drift between client and Gemini servers
-   *   <li>Race conditions in concurrent request processing
-   *   <li>Retry logic that may count failed requests
-   * </ul>
-   *
-   * @throws QuotaExceededException if safety threshold would be exceeded
-   */
+  // Check quota before making requests. Uses safety threshold (not daily limit) to account for
+  // clock drift, race conditions, and retry logic discrepancies between client and server.
   public void checkQuota() throws QuotaExceededException {
     resetIfNewDay();
 
@@ -205,9 +146,6 @@ public class DailyQuotaTracker {
     }
   }
 
-  /**
-   * Increment request count after successful API call.
-   */
   public void incrementRequestCount() {
     resetIfNewDay();
 
@@ -223,21 +161,11 @@ public class DailyQuotaTracker {
         remaining);
   }
 
-  /**
-   * Get remaining quota for today (based on safety threshold).
-   *
-   * @return Number of requests remaining before hitting safety threshold
-   */
   public int getRemainingQuota() {
     resetIfNewDay();
     return Math.max(0, safetyThreshold - currentState.getRequestCount());
   }
 
-  /**
-   * Get quota reset time in human-readable format.
-   *
-   * @return Reset time string (e.g., "midnight PST (in 8 hours)")
-   */
   public String getQuotaResetTime() {
     ZonedDateTime now = ZonedDateTime.now(PACIFIC_TIME);
     ZonedDateTime midnight = now.toLocalDate().plusDays(1).atStartOfDay(PACIFIC_TIME);
@@ -247,9 +175,6 @@ public class DailyQuotaTracker {
     return String.format("midnight PST (in %d hours)", hoursUntilReset);
   }
 
-  /**
-   * Log current quota status.
-   */
   public void logQuotaStatus() {
     resetIfNewDay();
 
@@ -274,17 +199,11 @@ public class DailyQuotaTracker {
         getQuotaResetTime());
   }
 
-  /**
-   * Reset quota state (for testing).
-   */
   void reset() {
     currentState = createNewQuotaState();
     saveQuotaState();
   }
 
-  /**
-   * Internal quota state representation.
-   */
   static class QuotaState {
     private String currentDate;
     private int requestCount;
