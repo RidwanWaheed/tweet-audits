@@ -51,7 +51,7 @@ Here's the thing: Gemini has *two* rate limits:
 - **15 RPM** (requests per minute) — easy to handle
 - **1000 RPD** (requests per day) — the hard part
 
-The RPM limit is straightforward: wait 6 seconds between requests and you're good. Thread.sleep() solves this perfectly.
+The RPM limit is straightforward: wait 4 seconds between requests and you're good. Thread.sleep() solves this perfectly.
 
 The RPD limit is where it gets interesting. No rate limiter library handles daily quotas that reset at a specific timezone (midnight Pacific Time). That requires persistent state tracking no matter what approach you use.
 
@@ -131,7 +131,7 @@ The system:
 
 Without tracking, you might process 100 tweets, hit quota at tweet #50, and watch the rest fail. That's frustrating.
 
-The 1000 requests per day limit is the real constraint for large archives. Processing 1000 tweets takes about 16 hours with batch delays, so multi-day jobs are common for very large archives. Quota tracking isn't optional — it's essential.
+The 1000 requests per day limit is the real constraint for very large archives. At 15 RPM, processing the full 1000-request daily quota takes just over an hour. However, if you have 10,000+ tweets to audit, you're looking at multi-day jobs spanning the quota reset cycle. Quota tracking isn't optional — it's essential.
 
 I chose JSON because:
 - It persists across restarts (unlike in-memory)
@@ -185,7 +185,7 @@ During production testing, I hit an interesting issue:
 - My client-side tracker: 997/1000 requests (3 remaining)
 - Gemini's response: **429 Rate Limit Exceeded**
 
-Wait, what? According to my tracking, I had 3 requests left. But Gemini disagreed.
+According to my tracking, I had 3 requests left. But Gemini disagreed.
 
 Turns out, there are timing issues in distributed systems: clock drift between my machine and Gemini's servers, race conditions in quota increment timing, retry logic discrepancies, etc. My tracker and Gemini's tracker weren't perfectly in sync.
 
@@ -337,13 +337,13 @@ Parallelism would be appropriate for internal APIs with no rate limits, or opera
 
 ## 5. Checkpoint Frequency
 
-I save the checkpoint after every batch (10 tweets), not after every tweet.
+I save the checkpoint after every batch (15 tweets), not after every tweet.
 
 ### Comparison
 
 | Strategy | Max Loss on Crash | Quota Waste | Disk I/O | Processing Overhead |
 |----------|-------------------|-------------|----------|---------------------|
-| Every Batch (Chosen) | 10 tweets | Up to 10 requests | ~1ms per batch | 0.03% |
+| Every Batch (Chosen) | 15 tweets | Up to 15 requests | ~1ms per batch | 0.02% |
 | Every Tweet | 1 tweet | ~1 request | ~1ms per tweet | 0.3% |
 | Manual Only | All progress | Unlimited | 0 | 0% |
 
@@ -352,21 +352,21 @@ I save the checkpoint after every batch (10 tweets), not after every tweet.
 The math is compelling:
 - JSON write: ~1ms
 - Gemini API call: ~2,000ms per tweet
-- Batch size: 10 tweets
-- Total batch time: ~20,000ms (20 seconds)
-- Checkpoint overhead: 1ms / 20,000ms = 0.0005%
+- Batch size: 15 tweets
+- Total batch time: ~30,000ms (30 seconds)
+- Checkpoint overhead: 1ms / 30,000ms = 0.003%
 
 For 100 tweets, checkpointing adds about 0.1 seconds to a ~200-second run. That's negligible.
 
 I'm already pausing 60 seconds between batches for rate limiting, so saving during that pause is a natural checkpoint point. The code is simpler this way — no need to save inside the tweet processing loop.
 
-The max risk is losing 10 tweets if the app crashes mid-batch, which is acceptable on the free tier ($0 cost).
+The max risk is losing 15 tweets if the app crashes mid-batch, which is acceptable on the free tier ($0 cost).
 
 **Crash scenarios:**
 ```
 Scenario 1: Crash during batch processing
   - Saved state: Last completed batch
-  - Lost progress: Current batch (max 10 tweets)
+  - Lost progress: Current batch (max 15 tweets)
   - Recovery: Resume from next batch
 
 Scenario 2: Crash during rate limit pause
@@ -375,7 +375,7 @@ Scenario 2: Crash during rate limit pause
   - Recovery: Resume from next batch immediately
 ```
 
-Saving every tweet would be 10x more disk writes with minimal benefit (API call time dominates anyway). Manual checkpoints only would defeat the purpose — any crash would lose ALL progress.
+Saving every tweet would be 15x more disk writes with minimal benefit (API call time dominates anyway). Manual checkpoints only would defeat the purpose — any crash would lose ALL progress.
 
 ---
 
@@ -560,7 +560,7 @@ Core principle: In distributed systems, always use the authoritative service's t
 | Graceful Shutdown | Protected method extraction | Testable, simple, avoids over-engineering |
 | State Management | JSON + CSV | Fast resume, clean separation of concerns |
 | Concurrency | Sequential | Only valid approach for rate-limited APIs |
-| Checkpoint Frequency | Per-batch (10 tweets) | Aligns with rate limiting, negligible overhead |
+| Checkpoint Frequency | Per-batch (15 tweets) | Aligns with rate limiting, negligible overhead |
 | Checkpoint Cleanup | Auto-delete on success | Clean slate for next run, manual resume on crash |
 | Error Recovery | @Retryable | Industry standard, handles transient failures |
 | Timezone | Pacific Time | Matches Gemini's authoritative quota source |
