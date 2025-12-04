@@ -2,9 +2,28 @@
 
 Analyze your X (Twitter) archive using Gemini AI and flag tweets for deletion based on custom criteria.
 
-## Project Status
+## Overview
 
-🚧 **In Development** - Learning project focusing on modern Java backend practices
+Request an archive of your posts on X, analyse them using Google's Gemini AI, and flag tweets for deletion based on any criteria. For instance:
+* Posts containing certain words you no longer want associated with you
+* Phrases that aren't professional
+* Old opinions you've moved on from
+* Any custom alignment rules you define
+
+### Learning Focus
+
+This is a learning project focusing on modern Java backend practices and production-ready patterns:
+
+- **File I/O operations** for parsing large datasets (X archive format)
+- **HTTP client patterns** and third-party API integration (Google Gemini)
+- **Rate limiting and backpressure handling** (adaptive rate limiting, daily quota tracking)
+- **Concurrent processing patterns** (batching vs sequential vs full async)
+- **Error recovery strategies** (retry logic, checkpointing, partial failures)
+- **State management** (tracking processed tweets, resumable workflows)
+- **Configuration management** and secrets handling
+- **Writing testable code** with external dependencies
+
+For detailed architectural decisions and tradeoffs, see [TRADEOFFS.md](TRADEOFFS.md)
 
 ## Tech Stack
 
@@ -15,12 +34,58 @@ Analyze your X (Twitter) archive using Gemini AI and flag tweets for deletion ba
 - **Maven** (Build tool)
 - **Lombok** (Reduce boilerplate)
 
-## What This Tool Does
+## Output Format
 
-1. Reads your Twitter/X archive (tweets.js)
-2. Analyzes each tweet against your alignment criteria using Gemini AI
-3. Flags tweets for deletion (e.g., unprofessional language, regretted keywords)
-4. Outputs a CSV file with flagged tweet URLs
+The application generates a CSV file at `results/flagged_tweets.csv` with the following columns:
+
+```csv
+tweetUrl,tweetId,status,matchedCriteria,reason
+https://x.com/i/status/12345,12345,FLAGGED,forbidden_words|unprofessional,Contains forbidden content
+https://x.com/i/status/67890,67890,ERROR,,API timeout after 3 retries
+```
+
+**Status Types:**
+- `FLAGGED` - Tweet flagged for deletion based on alignment criteria
+- `ERROR` - Evaluation failed (network issues, API errors, etc.)
+
+**Note:** Clean tweets (not flagged and no errors) are NOT included in the output CSV.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     TweetAuditService                           │
+│                   (Main Orchestrator)                           │
+│                                                                 │
+│  1. Loads tweets                                                │
+│  2. Processes in batches                                        │
+│  3. Collects results                                            │
+│  4. Writes output                                               │
+└────┬────────────────┬────────────────┬────────────────┬─────────┘
+     │                │                │                │
+     │ parseTweets()  │ evaluate()     │ evaluate()     │ writeResults()
+     ▼                ▼                ▼                ▼
+┌─────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│ Archive     │  │ Gemini       │  │ Alignment    │  │ CSV          │
+│ Parser      │  │ Client       │  │ Criteria     │  │ Writer       │
+│             │  │              │  │              │  │              │
+│ - Parse JS  │  │ - Build req  │  │ - Config     │  │ - Filter     │
+│ - Filter RT │  │ - Call API   │  │ - Criteria   │  │ - Escape     │
+│ - Return    │  │ - Parse resp │  │ - Context    │  │ - Format     │
+│   List<T>   │  │ - Retry      │  │              │  │ - Write CSV  │
+└─────────────┘  └──────┬───────┘  └──────────────┘  └──────────────┘
+                        │
+                        │ HTTP POST
+                        ▼
+                 ┌──────────────┐
+                 │ Gemini API   │
+                 │ (External)   │
+                 │              │
+                 │ - Evaluate   │
+                 │ - Return     │
+                 │   JSON       │
+                 └──────────────┘
+```
 
 ## Quick Start
 
@@ -28,66 +93,99 @@ Analyze your X (Twitter) archive using Gemini AI and flag tweets for deletion ba
 
 - Java 21 or higher
 - Maven 3.6+
-- Gemini API key ([Get one here](https://aistudio.google.com/app/apikey))
-- Twitter archive ([Request here](https://x.com/settings/download_your_data))
 
 ### Setup
 
-1. **Clone and build:**
+1. **Request Your X Archive**
+
+   1. Go to [x.com](https://x.com) and log in
+   2. Navigate to: More → Settings and privacy → Your account → Download an archive of your data
+   3. Verify your identity
+   4. Wait 24-48 hours for the email with download link
+   5. Extract the ZIP file and locate the `tweets.js` file
+   6. Place it in the `my_data/` folder in this project (gitignored for privacy)
+
+   **Note:** The project comes with sample data in `src/main/resources/sample-data/tweets-sample.js` for testing.
+
+2. **Get Gemini API Key**
+
+   1. Visit [Google AI Studio](https://aistudio.google.com/app/apikey)
+   2. Create an API key
+   3. Create `src/main/resources/application-dev.properties`:
+      ```properties
+      # Development secrets (this file is gitignored)
+      GEMINI_API_KEY=your_gemini_api_key_here
+      ```
+
+3. **Clone and build:**
    ```bash
    mvn clean install
    ```
 
-2. **Configure API key:**
+4. **Run the application:**
    ```bash
-   cp src/main/resources/application-example.properties src/main/resources/application-local.properties
-   # Edit application-local.properties and add your real API key
+   mvn spring-boot:run -Dspring-boot.run.profiles=dev
    ```
 
-3. **Run the application:**
-   ```bash
-   mvn spring-boot:run
-   ```
+5. **Check the results:**
 
-## Project Structure
+   Flagged tweets and errors will be written to `results/flagged_tweets.csv`
 
+### Running Tests
+
+Run all 20 unit and integration tests:
+
+```bash
+mvn test
 ```
-tweet-audit/
-├── src/
-│   ├── main/
-│   │   ├── java/com/ridwan/tweetaudit/
-│   │   │   ├── TweetAuditApplication.java   # Main entry point
-│   │   │   ├── config/                       # Configuration classes
-│   │   │   ├── model/                        # Domain models
-│   │   │   ├── service/                      # Business logic
-│   │   │   └── client/                       # External API clients
-│   │   └── resources/
-│   │       ├── application.properties        # Base config
-│   │       └── application-example.properties # Template
-│   └── test/
-│       └── java/com/ridwan/tweetaudit/       # Unit tests
-├── pom.xml                                    # Maven dependencies
-├── TRADEOFFS.md                               # Architecture decisions
-└── LEARNING_NOTES.md                          # Learning journal
-```
+
+Test coverage includes:
+- Domain model builders and validation
+- Archive parsing and tweet filtering
+- Gemini API client with retry logic
+- CSV writer with proper escaping
+- End-to-end service orchestration
 
 ## Configuration
 
-Key configuration in `application.properties`:
+### Spring Profiles
 
-- `gemini.api.rate-limit.requests-per-minute=10` - Respect Gemini free tier limits
-- `tweet.processing.batch-size=10` - Process tweets in batches
-- `tweet.processing.max-retries=3` - Retry failed API calls
-- `tweet.processing.initial-backoff-ms=1000` - Exponential backoff starting point
+The application uses Spring Profiles for environment-specific configuration:
 
-## Learning Goals
+**Development (local):**
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
+- Uses `application-dev.properties` (gitignored)
+- Contains your API key locally
 
-This project focuses on:
-- ✅ Modern API integration (WebFlux, WebClient)
-- ✅ Error handling & retry logic (Spring Retry, exponential backoff)
-- ✅ Concurrency patterns (batched processing with rate limiting)
-- ✅ Testing strategies (mocking external APIs)
-- ✅ Architectural decision-making (documented in TRADEOFFS.md)
+**Production:**
+```bash
+export GEMINI_API_KEY=your_key_from_secure_vault
+mvn spring-boot:run -Dspring-boot.run.profiles=prod
+```
+- Uses `application-prod.properties` (committed, no secrets)
+- Reads API key from environment variable
+
+### Alignment Criteria
+
+Customize what gets flagged by editing these settings in [application.properties](src/main/resources/application.properties):
+
+```properties
+# What content to flag
+alignment.forbidden-words=hate speech, racial slurs, doxxing, threats of violence, sexual harassment, extremist rhetoric, personally identifiable information (PII)
+
+# Your context (who you are, what matters to you)
+alignment.context=Just a normal internet user but also mindful of his digital footprint. The goal is to be authentic and relatable without posting content that would be considered toxic or cancellable by a future employer.
+
+# Your desired tone
+alignment.desired-tone=Casual, witty, authentic, relatable, clear. Avoids being overly reactive, aggressive, or strictly corporate.
+
+# Optional: Check for unprofessional language
+alignment.check-professionalism=false
+```
+
+For advanced configuration options (API settings, batch size, paths), see [application.properties](src/main/resources/application.properties).
 
 ## License
 

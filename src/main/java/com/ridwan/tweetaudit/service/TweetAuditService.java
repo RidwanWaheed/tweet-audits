@@ -1,0 +1,205 @@
+package com.ridwan.tweetaudit.service;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.stereotype.Service;
+
+import com.ridwan.tweetaudit.checkpoint.CheckpointManager;
+import com.ridwan.tweetaudit.client.GeminiClient;
+import com.ridwan.tweetaudit.config.AlignmentCriteria;
+import com.ridwan.tweetaudit.model.ProcessingCheckpoint;
+import com.ridwan.tweetaudit.output.CSVWriter;
+import com.ridwan.tweetaudit.parser.ArchiveParser;
+import com.ridwan.tweetaudit.progress.ProgressTracker;
+import com.ridwan.tweetaudit.ratelimit.DailyQuotaTracker;
+import com.ridwan.tweetaudit.validation.ConfigValidator;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import com.ridwan.tweetaudit.model.Tweet;
+import com.ridwan.tweetaudit.model.TweetEvaluationResult;
+
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@Service
+public class TweetAuditService implements CommandLineRunner {
+
+  private final ArchiveParser archiveParser;
+  private final GeminiClient geminiClient;
+  private final CSVWriter csvWriter;
+  private final AlignmentCriteria criteria;
+  private final CheckpointManager checkpointManager;
+  private final ConfigValidator configValidator;
+  private final ProgressTracker progressTracker;
+  private final DailyQuotaTracker quotaTracker;
+  private final int batchSize;
+  private final String archivePath;
+  private final String apiKey;
+  private final String outputPath;
+
+  public TweetAuditService(
+      ArchiveParser archiveParser,
+      GeminiClient geminiClient,
+      CSVWriter csvWriter,
+      AlignmentCriteria criteria,
+      CheckpointManager checkpointManager,
+      ConfigValidator configValidator,
+      ProgressTracker progressTracker,
+      DailyQuotaTracker quotaTracker,
+      @Value("${tweet.processing.batch-size}") int batchSize,
+      @Value("${archive.input-path}") String archivePath,
+      @Value("${gemini.api.key}") String apiKey,
+      @Value("${output.csv-path}") String outputPath) {
+    this.archiveParser = archiveParser;
+    this.geminiClient = geminiClient;
+    this.csvWriter = csvWriter;
+    this.criteria = criteria;
+    this.checkpointManager = checkpointManager;
+    this.configValidator = configValidator;
+    this.progressTracker = progressTracker;
+    this.quotaTracker = quotaTracker;
+    this.batchSize = batchSize;
+    this.archivePath = archivePath;
+    this.apiKey = apiKey;
+    this.outputPath = outputPath;
+  }
+
+  @Override
+  public void run(String... args) throws Exception {
+    log.info("Starting tweet audit process...");
+
+    configValidator.validateConfiguration(apiKey, archivePath, outputPath, criteria, batchSize);
+
+    // Display current quota status
+    quotaTracker.logQuotaStatus();
+
+    log.info("Loading tweets from: {}", archivePath);
+
+    List<Tweet> tweets = archiveParser.parseTweets(archivePath);
+    log.info("Loaded {} tweets", tweets.size());
+
+    ProcessingCheckpoint checkpoint = checkpointManager.loadCheckpoint();
+    Set<String> processedTweetIds;
+    List<TweetEvaluationResult> results = new ArrayList<>();
+    int flaggedCount = 0;
+    int errorCount = 0;
+
+    if (checkpoint != null) {
+      processedTweetIds = new HashSet<>(checkpoint.getProcessedTweetIds());
+      flaggedCount = checkpoint.getFlaggedCount();
+      errorCount = checkpoint.getErrorCount();
+      log.info("Resuming from checkpoint: {} tweets already processed", processedTweetIds.size());
+    } else {
+      processedTweetIds = new HashSet<>();
+      log.info("No checkpoint found, starting fresh");
+      // Clear CSV file when starting fresh to avoid duplicates from previous runs
+      csvWriter.clearResults();
+    }
+
+    final Set<String> processed = processedTweetIds;
+    List<Tweet> remainingTweets =
+        tweets.stream().filter(t -> !processed.contains(t.getIdStr())).toList();
+
+    if (remainingTweets.isEmpty()) {
+      log.info("All tweets already processed!");
+      return;
+    }
+
+    log.info(
+        "Processing {} remaining tweets (skipped {} already processed)",
+        remainingTweets.size(),
+        processedTweetIds.size());
+
+    int totalBatches = (int) Math.ceil((double) remainingTweets.size() / batchSize);
+    log.info(
+        "Processing {} tweets in {} batches of {}",
+        remainingTweets.size(),
+        totalBatches,
+        batchSize);
+
+    // Start progress tracking
+    progressTracker.start(remainingTweets.size());
+
+    for (int batchNum = 0; batchNum < totalBatches; batchNum++) {
+      int startIdx = batchNum * batchSize;
+      int endIdx = Math.min(startIdx + batchSize, remainingTweets.size());
+      List<Tweet> batch = remainingTweets.subList(startIdx, endIdx);
+
+      log.info("Processing batch {}/{} ({} tweets)", batchNum + 1, totalBatches, batch.size());
+
+      for (Tweet tweet : batch) {
+        try {
+          TweetEvaluationResult result = geminiClient.evaluateTweet(tweet, criteria);
+          results.add(result);
+          processedTweetIds.add(tweet.getIdStr());
+
+          if (result.isShouldDelete()) {
+            flaggedCount++;
+          }
+
+          // Update progress
+          progressTracker.increment();
+
+        } catch (Exception e) {
+          log.error("Failed to evaluate tweet {}: {}", tweet.getIdStr(), e.getMessage());
+          TweetEvaluationResult errorResult =
+              TweetEvaluationResult.builder()
+                  .tweetId(tweet.getIdStr())
+                  .shouldDelete(false)
+                  .reason("")
+                  .errorMessage("Evaluation failed: " + e.getMessage())
+                  .build();
+          results.add(errorResult);
+          processedTweetIds.add(tweet.getIdStr());
+          errorCount++;
+
+          // Update progress even on error
+          progressTracker.increment();
+        }
+      }
+
+      ProcessingCheckpoint updatedCheckpoint =
+          ProcessingCheckpoint.builder()
+              .lastProcessedTweetId(batch.get(batch.size() - 1).getIdStr())
+              .processedTweetIds(processedTweetIds)
+              .totalProcessed(processedTweetIds.size())
+              .totalTweets(tweets.size())
+              .flaggedCount(flaggedCount)
+              .errorCount(errorCount)
+              .build();
+
+      checkpointManager.saveCheckpoint(updatedCheckpoint);
+
+      csvWriter.appendResults(results);
+      results.clear();
+
+      if (batchNum < totalBatches - 1) {
+        log.info("Waiting 60 seconds before next batch (rate limiting)...");
+        Thread.sleep(60000); // 15 requests/minute = batch of 15 every 60 seconds
+      }
+    }
+
+    // Complete progress tracking
+    progressTracker.complete();
+
+    log.info("Evaluation complete.");
+
+    checkpointManager.deleteCheckpoint();
+    log.info("Checkpoint deleted (processing complete)");
+
+    long cleanCount = processedTweetIds.size() - flaggedCount - errorCount;
+
+    log.info("=== Tweet Audit Complete ===");
+    log.info("Total tweets processed: {}", processedTweetIds.size());
+    log.info("Clean tweets: {}", cleanCount);
+    log.info("Flagged for deletion: {}", flaggedCount);
+    log.info("Errors: {}", errorCount);
+
+    // Display final quota status
+    quotaTracker.logQuotaStatus();
+  }
+}

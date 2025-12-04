@@ -44,21 +44,24 @@ build/
 Thumbs.db
 
 # Application Specific
-# Twitter archive files (SENSITIVE DATA)
-tweets.js
-twitter-*.zip
-data/
+# Twitter archive files (SENSITIVE DATA - real user data)
+my_data/
 docs/
+
+# Learning notes (personal)
+CLAUDE.md
+LEARNING_NOTES.md
 
 # API Keys and secrets (NEVER COMMIT THESE)
 application-local.properties
+application-dev.properties
 *.env
 .env
 secrets/
 
 # Output files
-flagged_tweets.csv
-*.csv
+results/
+test-results/
 
 # Logs
 logs/
