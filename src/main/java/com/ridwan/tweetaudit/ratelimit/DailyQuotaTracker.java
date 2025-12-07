@@ -17,6 +17,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Tracks daily API quota usage with persistent state and timezone-aware reset.
+ *
+ * <p>Key behaviors:
+ * <ul>
+ *   <li>Tracks quota in Pacific Time (Gemini resets at midnight PST)
+ *   <li>Persists state to JSON file (survives app restarts)
+ *   <li>Uses safety threshold (not daily limit) to account for clock drift
+ *   <li>Triggers graceful shutdown when threshold is reached
+ * </ul>
+ *
+ * @see #checkQuota() for shutdown behavior
+ */
 @Component
 @Slf4j
 public class DailyQuotaTracker {
@@ -105,20 +118,26 @@ public class DailyQuotaTracker {
     }
   }
 
-  // Check quota before making requests. Uses safety threshold (not daily limit) to account for
-  // clock drift, race conditions, and retry logic discrepancies between client and server.
+  /**
+   * Check quota before making a request. Triggers graceful shutdown if threshold is reached.
+   *
+   * <p><b>Important:</b> This method may terminate the application. When the safety threshold
+   * is reached, it triggers Spring cleanup followed by JVM termination via {@link #performShutdown}.
+   *
+   * @throws QuotaExceededException never thrown (shutdown happens instead), kept for API clarity
+   */
   public void checkQuota() throws QuotaExceededException {
     resetIfNewDay();
 
     if (currentState.getRequestCount() >= safetyThreshold) {
       String resetTime = getQuotaResetTime();
 
-      log.error("═══════════════════════════════════════════════════");
+      log.error("===================================================");
       log.error("Safety threshold reached! ({}/{})", currentState.getRequestCount(), safetyThreshold);
       log.error("Daily limit: {}, Safety margin: {} requests", dailyLimit, dailyLimit - safetyThreshold);
       log.error("Quota resets at: {}", resetTime);
       log.error("Initiating graceful shutdown...");
-      log.error("═══════════════════════════════════════════════════");
+      log.error("===================================================");
 
       // Trigger Spring cleanup (close connections, flush logs, etc.)
       int exitCode = SpringApplication.exit(appContext, () -> 0);
@@ -139,7 +158,7 @@ public class DailyQuotaTracker {
     int warningPoint = (int) (safetyThreshold * 0.9);
     if (currentState.getRequestCount() >= warningPoint && currentState.getRequestCount() < safetyThreshold) {
       log.warn(
-          "⚠️  Approaching safety threshold! Used: {}/{} requests ({}% of threshold)",
+          "WARNING: Approaching safety threshold! Used: {}/{} requests ({}% of threshold)",
           currentState.getRequestCount(),
           safetyThreshold,
           (currentState.getRequestCount() * 100) / safetyThreshold);
@@ -234,6 +253,9 @@ public class DailyQuotaTracker {
     }
   }
 
+  /**
+   * Terminate the JVM. Extracted as protected method for testability (Mockito can spy/override).
+   */
   protected void performShutdown(int exitCode) {
     System.exit(exitCode);
   }
