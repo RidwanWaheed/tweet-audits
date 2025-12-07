@@ -10,6 +10,12 @@ Flag tweets for deletion based on:
 - Old opinions you've moved on from
 - Any custom alignment rules you define
 
+```mermaid
+flowchart LR
+    A[tweets.js] --> B[Tweet Processor] --> C[Gemini API]
+    C --> D[flagged_tweets.csv]
+```
+
 For detailed architecture and design decisions, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Tech Stack
@@ -18,14 +24,6 @@ For detailed architecture and design decisions, see [docs/ARCHITECTURE.md](docs/
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot&logoColor=white)
 ![Google Gemini](https://img.shields.io/badge/Google%20Gemini-API-4285F4?logo=google&logoColor=white)
 ![Maven](https://img.shields.io/badge/Maven-3.6+-C71A36?logo=apachemaven&logoColor=white)
-
-## How It Works
-
-```mermaid
-flowchart LR
-    A[tweets.js] --> B[Tweet Processor] --> C[Gemini API]
-    C --> D[flagged_tweets.csv]
-```
 
 ## Quick Start
 
