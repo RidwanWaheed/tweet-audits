@@ -46,7 +46,6 @@ Thumbs.db
 # Application Specific
 # Twitter archive files (SENSITIVE DATA - real user data)
 my_data/
-docs/
 
 # Learning notes (personal)
 CLAUDE.md
