@@ -3,6 +3,7 @@ package com.ridwan.tweetaudit.client;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 import java.util.List;
@@ -15,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ridwan.tweetaudit.TestFixtures;
 import com.ridwan.tweetaudit.config.AlignmentCriteria;
 import com.ridwan.tweetaudit.config.GeminiConfig;
 import com.ridwan.tweetaudit.dto.*;
@@ -86,11 +88,7 @@ class GeminiClientTest {
 
     @Test
     void shouldSuccessfullyEvaluateTweetAndReturnFlagged() {
-        Tweet tweet = Tweet.builder()
-                .idStr("12345")
-                .fullText("This is killing me!")
-                .createdAt("2024-01-01")
-                .build();
+        Tweet tweet = TestFixtures.flaggedTweet();
 
         String mockJsonResponse = """
             {
@@ -107,7 +105,7 @@ class GeminiClientTest {
         TweetEvaluationResult result = geminiClient.evaluateTweet(tweet, alignmentCriteria);
 
         assertNotNull(result);
-        assertEquals("12345", result.getTweetId());
+        assertEquals("2", result.getTweetId());
         assertTrue(result.isShouldDelete());
         assertEquals("Contains forbidden word 'kill'", result.getReason());
         assertEquals(1, result.getMatchedCriteria().size());
@@ -120,11 +118,7 @@ class GeminiClientTest {
 
     @Test
     void shouldSuccessfullyEvaluateTweetAndReturnClean() {
-        Tweet tweet = Tweet.builder()
-                .idStr("67890")
-                .fullText("Just finished a great coding session!")
-                .createdAt("2024-01-01")
-                .build();
+        Tweet tweet = TestFixtures.cleanTweet();
 
         String mockJsonResponse = """
             {
@@ -141,7 +135,7 @@ class GeminiClientTest {
         TweetEvaluationResult result = geminiClient.evaluateTweet(tweet, alignmentCriteria);
 
         assertNotNull(result);
-        assertEquals("67890", result.getTweetId());
+        assertEquals("1", result.getTweetId());
         assertFalse(result.isShouldDelete());
         assertEquals("Tweet is professional and appropriate", result.getReason());
         assertTrue(result.getMatchedCriteria().isEmpty());
@@ -150,11 +144,7 @@ class GeminiClientTest {
 
     @Test
     void shouldHandleMultipleMatchedCriteria() {
-        Tweet tweet = Tweet.builder()
-                .idStr("11111")
-                .fullText("That bum is killing me with stupid questions")
-                .createdAt("2024-01-01")
-                .build();
+        Tweet tweet = TestFixtures.flaggedTweet();
 
         String mockJsonResponse = """
             {
